@@ -1,0 +1,25 @@
+{
+  "name": "healthvillage-backend",
+  "version": "1.0.0",
+  "description": "Backend API for HealthVillage - Rural Telemedicine Platform",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "keywords": [
+    "telemedicine",
+    "healthcare",
+    "civorax",
+    "express",
+    "backend"
+  ],
+  "author": "Krishna Joshi",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  }
+}
