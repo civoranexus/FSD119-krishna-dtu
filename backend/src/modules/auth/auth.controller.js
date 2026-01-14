@@ -1,7 +1,5 @@
-import {
-  register,
-  login
-} from './auth.service.js';
+import { register, login } from './auth.service.js';
+import { generateToken } from '../../utils/jwt.js';
 
 /**
  * Controller layer
@@ -10,38 +8,42 @@ import {
 
 export const registerUser = async (req, res) => {
   try {
-    // Placeholder: extract request data
-    const userData = req.body;
-
-    const result = await register(userData);
+    const result = await register(req.body);
 
     res.status(201).json({
-      message: 'User registration endpoint (placeholder)',
-      data: result
+      message: 'User registered successfully',
+      data: result,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error('REGISTER CONTROLLER ERROR:', error.message);
+
+    res.status(400).json({
       message: 'Registration failed',
-      error: error.message
+      error: error.message,
     });
   }
 };
 
 export const loginUser = async (req, res) => {
   try {
-    // Placeholder: extract credentials
-    const credentials = req.body;
+    const user = await login(req.body);
 
-    const result = await login(credentials);
+    const token = generateToken({
+      id: user.id,
+      role: user.role,
+    });
 
     res.status(200).json({
-      message: 'User login endpoint (placeholder)',
-      data: result
+      message: 'User login successful',
+      token,
+      user,
     });
   } catch (error) {
+    console.error('LOGIN CONTROLLER ERROR:', error.message);
+
     res.status(401).json({
       message: 'Login failed',
-      error: error.message
+      error: error.message,
     });
   }
 };
