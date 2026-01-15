@@ -2,6 +2,7 @@ import { Router } from 'express';
 import authRoutes from '../modules/auth/auth.routes.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/rbac.middleware.js';
+import appointmentRoutes from '../modules/appointments/appointments.routes.js';
 
 const router = Router();
 
@@ -27,6 +28,7 @@ router.get('/protected', authenticate, (req, res) => {
   });
 });
 
+router.use('/appointments', appointmentRoutes);
 /**
  * Doctor-only route
  */
