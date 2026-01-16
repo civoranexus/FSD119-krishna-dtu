@@ -6,6 +6,9 @@ import {
   createAppointmentHandler,
   getPatientAppointmentsHandler,
   getDoctorAppointmentsHandler,
+  confirmAppointmentHandler,
+  completeAppointmentHandler,
+  cancelAppointmentHandler,
 } from './appointments.controller.js';
 
 const router = Router();
@@ -39,7 +42,10 @@ router.get(
   authorize(['doctor']),
   getDoctorAppointmentsHandler
 );
-// Doctor confirms appointment
+
+/**
+ * Doctor confirms appointment
+ */
 router.patch(
   '/:id/confirm',
   authenticate,
@@ -47,7 +53,9 @@ router.patch(
   confirmAppointmentHandler
 );
 
-// Doctor completes appointment
+/**
+ * Doctor completes appointment
+ */
 router.patch(
   '/:id/complete',
   authenticate,
@@ -55,7 +63,9 @@ router.patch(
   completeAppointmentHandler
 );
 
-// Patient cancels appointment
+/**
+ * Patient cancels appointment
+ */
 router.patch(
   '/:id/cancel',
   authenticate,
