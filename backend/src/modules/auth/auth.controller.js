@@ -8,14 +8,18 @@ import { generateToken } from '../../utils/jwt.js';
 
 export const registerUser = async (req, res) => {
   try {
+    console.log('🟡 REGISTER CONTROLLER: Received request body:', req.body);
+    
     const result = await register(req.body);
 
+    console.log('🟡 REGISTER CONTROLLER: Registration successful');
     res.status(201).json({
       message: 'User registered successfully',
       data: result,
     });
   } catch (error) {
-    console.error('REGISTER CONTROLLER ERROR:', error.message);
+    console.error('❌ REGISTER CONTROLLER ERROR:', error.message);
+    console.error('Stack:', error.stack);
 
     res.status(400).json({
       message: 'Registration failed',

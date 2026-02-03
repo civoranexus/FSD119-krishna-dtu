@@ -1,60 +1,68 @@
-import { getDb } from '../../utils/db.js';
+import { User } from '../../models/User.js';
 import bcrypt from 'bcrypt';
-import { v4 as uuidv4 } from 'uuid';
 
-export const register = async ({ name, email, password }) => {
-  const db = getDb();
+export const register = async ({ name, email, password, role = 'patient' }) => {
+  console.log('🔵 REGISTER SERVICE: Starting registration', { name, email, role });
 
-  const [existing] = await db.execute(
-    'SELECT id FROM users WHERE email = ?',
-    [email]
-  );
+  // Validate inputs
+  if (!name || !email || !password) {
+    throw new Error('Name, email, and password are required');
+  }
 
-  if (existing.length > 0) {
+  // Check if user already exists
+  console.log('🔵 REGISTER SERVICE: Checking if user exists...');
+  const existing = await User.findOne({ email });
+
+  if (existing) {
+    console.log('⚠️ REGISTER SERVICE: User already exists');
     throw new Error('User already exists');
   }
 
+  console.log('🔵 REGISTER SERVICE: Hashing password...');
   const hashedPassword = await bcrypt.hash(password, 10);
-  const id = uuidv4();
 
-  await db.execute(
-    'INSERT INTO users (id, name, email, password) VALUES (?, ?, ?, ?)',
-    [id, name, email, hashedPassword]
-  );
+  // Create new user - MongoDB will auto-generate _id
+  console.log('🔵 REGISTER SERVICE: Creating user in database...');
+  const user = await User.create({
+    name,
+    email,
+    password: hashedPassword,
+    role,
+  });
 
-  return { id, name, email };
+  console.log('✅ REGISTER SERVICE: User created successfully', { id: user._id, email: user.email });
+  return { id: user._id, name: user.name, email: user.email };
 };
 
 export const login = async ({ email, password }) => {
-  const db=getDb();
   try {
+    console.log('🔵 LOGIN SERVICE: Starting login attempt for', email);
+    
     if (!email || !password) {
       throw new Error('Email and password are required');
     }
 
-    const [rows] = await db.execute(
-      'SELECT id, email, password, role FROM users WHERE email = ?',
-      [email]
-    );
+    const user = await User.findOne({ email });
 
-    if (rows.length === 0) {
+    if (!user) {
+      console.log('⚠️ LOGIN SERVICE: User not found');
       throw new Error('Invalid credentials');
     }
-
-    const user = rows[0];
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
+      console.log('⚠️ LOGIN SERVICE: Password mismatch');
       throw new Error('Invalid credentials');
     }
 
+    console.log('✅ LOGIN SERVICE: Login successful for', email);
     return {
-      id: user.id,
+      id: user._id,
       email: user.email,
       role: user.role,
     };
   } catch (error) {
-    console.error('LOGIN SERVICE ERROR:', error.message);
+    console.error('❌ LOGIN SERVICE ERROR:', error.message);
     throw error;
   }
 };

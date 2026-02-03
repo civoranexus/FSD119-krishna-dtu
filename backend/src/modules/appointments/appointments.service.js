@@ -1,4 +1,5 @@
-import { getDb } from '../../utils/db.js';
+import { Appointment } from '../../models/Appointment.js';
+import { DoctorAvailability } from '../../models/DoctorAvailability.js';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -9,21 +10,21 @@ const isWithinAvailability = async (
   appointmentDate,
   appointmentTime
 ) => {
-  const db = getDb();
-
   const day = new Date(appointmentDate)
     .toLocaleDateString('en-US', { weekday: 'long' })
     .toLowerCase();
 
-  const [rows] = await db.execute(
-    `SELECT 1 FROM doctor_availability
-     WHERE doctor_id = ?
-       AND day_of_week = ?
-       AND ? BETWEEN start_time AND end_time`,
-    [doctorId, day, appointmentTime]
-  );
+  const availability = await DoctorAvailability.findOne({
+    doctorId,
+    day_of_week: day,
+  });
 
-  return rows.length > 0;
+  if (!availability) {
+    return false;
+  }
+
+  // Simple string comparison for time (e.g., "09:00" between "08:00" and "17:00")
+  return appointmentTime >= availability.start_time && appointmentTime <= availability.end_time;
 };
 
 /**
@@ -36,8 +37,6 @@ export const createAppointment = async ({
   appointment_time,
   reason,
 }) => {
-  const db = getDb();
-
   // 1️⃣ Prevent booking in the past
   const appointmentDateTime = new Date(
     `${appointment_date}T${appointment_time}`
@@ -58,28 +57,29 @@ export const createAppointment = async ({
   }
 
   // 3️⃣ Prevent duplicate booking (same patient + doctor + time)
-  const [existing] = await db.execute(
-    `SELECT id FROM appointments
-     WHERE patient_id = ?
-       AND doctor_id = ?
-       AND appointment_date = ?
-       AND appointment_time = ?
-       AND status IN ('scheduled','confirmed')`,
-    [patientId, doctorId, appointment_date, appointment_time]
-  );
+  const existing = await Appointment.findOne({
+    patientId,
+    doctorId,
+    appointment_date,
+    appointment_time,
+    status: { $in: ['scheduled', 'confirmed'] },
+  });
 
-  if (existing.length > 0) {
+  if (existing) {
     throw new Error('You already have an appointment at this time');
   }
 
   // 4️⃣ Insert appointment
   const id = uuidv4();
-  await db.execute(
-    `INSERT INTO appointments
-     (id, patient_id, doctor_id, appointment_date, appointment_time, reason)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, patientId, doctorId, appointment_date, appointment_time, reason]
-  );
+  await Appointment.create({
+    _id: id,
+    patientId,
+    doctorId,
+    appointment_date,
+    appointment_time,
+    reason,
+    status: 'scheduled',
+  });
 
   return { id };
 };
@@ -88,55 +88,41 @@ export const createAppointment = async ({
  * Get appointments for patient
  */
 export const getAppointmentsForPatient = async (patientId) => {
-  const db = getDb();
+  const appointments = await Appointment.find({ patientId }).sort({
+    appointment_date: -1,
+    appointment_time: -1,
+  });
 
-  const [rows] = await db.execute(
-    `SELECT *
-     FROM appointments
-     WHERE patient_id = ?
-     ORDER BY appointment_date DESC, appointment_time DESC`,
-    [patientId]
-  );
-
-  return rows;
+  return appointments;
 };
 
 /**
  * Get appointments for doctor
  */
 export const getAppointmentsForDoctor = async (doctorId) => {
-  const db = getDb();
+  const appointments = await Appointment.find({ doctorId }).sort({
+    appointment_date: -1,
+    appointment_time: -1,
+  });
 
-  const [rows] = await db.execute(
-    `SELECT *
-     FROM appointments
-     WHERE doctor_id = ?
-     ORDER BY appointment_date DESC, appointment_time DESC`,
-    [doctorId]
-  );
-
-  return rows;
+  return appointments;
 };
 
 /**
  * Update appointment status (DOCTOR / PATIENT)
  */
 export const updateAppointmentStatus = async (appointmentId, status) => {
-  const db = getDb();
-
   const allowedStatuses = ['confirmed', 'completed', 'cancelled'];
   if (!allowedStatuses.includes(status)) {
     throw new Error('Invalid appointment status');
   }
 
-  const [result] = await db.execute(
-    `UPDATE appointments
-     SET status = ?
-     WHERE id = ?`,
-    [status, appointmentId]
+  const result = await Appointment.updateOne(
+    { _id: appointmentId },
+    { status }
   );
 
-  if (result.affectedRows === 0) {
+  if (result.matchedCount === 0) {
     throw new Error('Appointment not found');
   }
 

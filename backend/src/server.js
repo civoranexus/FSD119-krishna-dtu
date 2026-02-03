@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import mongoose from 'mongoose';
 
 // Resolve __dirname (ES modules)
 const __filename = fileURLToPath(import.meta.url);
@@ -15,9 +16,8 @@ dotenv.config({ path: envPath });
 
 // 🔍 HARD VERIFY ENV VARIABLES
 console.log('ENV CHECK:', {
-  DB_HOST: process.env.DB_HOST,
-  DB_USER: process.env.DB_USER,
-  DB_NAME: process.env.DB_NAME,
+  MONGO_URI: process.env.MONGO_URI,
+  JWT_SECRET: process.env.JWT_SECRET,
 });
 
 import express from 'express';
@@ -36,6 +36,29 @@ app.get('/health', (req, res) => {
 app.use('/api', apiRoutes);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+
+/**
+ * Start server with MongoDB connection
+ */
+async function startServer() {
+  try {
+    // Connect to MongoDB
+    const mongoUri = process.env.MONGO_URI;
+    if (!mongoUri) {
+      throw new Error('MONGO_URI not set in environment');
+    }
+
+    await mongoose.connect(mongoUri);
+    console.log('✅ Connected to MongoDB');
+
+    // Start Express server
+    app.listen(PORT, () => {
+      console.log(`✅ Server running on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('❌ Server startup failed:', error.message);
+    process.exit(1);
+  }
+}
+
+startServer();
