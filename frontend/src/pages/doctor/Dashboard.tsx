@@ -3,8 +3,15 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 import StatCard from "@/components/shared/StatCard";
 import StatusBadge from "@/components/shared/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { Calendar, Users, Clock, CheckCircle } from "lucide-react";
+import { Calendar, Users, Clock, CheckCircle, Eye } from "lucide-react";
 import { Link } from "react-router-dom";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import api from "@/lib/api";
 import { getUser } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +30,7 @@ interface Appointment {
 const DoctorDashboard = () => {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const user = getUser();
   const { toast } = useToast();
 

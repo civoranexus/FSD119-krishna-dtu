@@ -6,22 +6,30 @@ import {
   FileText,
   Download,
   Search,
-  Filter,
   FlaskConical,
   Pill,
   Stethoscope,
   Image,
+  Eye,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import api from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
-interface Record {
+interface MedicalRecord {
   _id: string;
   type: string;
   title: string;
   description: string;
   date: string;
   provider: string;
+  content?: string;
 }
 
 const iconMap: Record<string, any> = {
@@ -40,9 +48,13 @@ const categories = [
 ];
 
 const PatientRecords = () => {
-  const [records, setRecords] = useState<Record[]>([]);
+  const [records, setRecords] = useState<MedicalRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedRecord, setSelectedRecord] = useState<MedicalRecord | null>(null);
+  const [showViewDialog, setShowViewDialog] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(10);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -67,10 +79,56 @@ const PatientRecords = () => {
     }
   };
 
-  const filteredRecords = records.filter(record => 
-    record.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    record.description?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredRecords = records.filter(record => {
+    const matchesSearch = record.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      record.description?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesCategory = selectedCategory === "all" || record.type === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const getCategoryCount = (categoryValue: string) => {
+    if (categoryValue === "all") return records.length;
+    return records.filter(r => r.type === categoryValue).length;
+  };
+
+  const handleView = (record: MedicalRecord) => {
+    setSelectedRecord(record);
+    setShowViewDialog(true);
+  };
+
+  const handleDownload = (record: MedicalRecord) => {
+    // Create a downloadable text file with record details
+    const content = `
+Medical Record: ${record.title}
+Type: ${record.type}
+Date: ${record.date}
+Provider: ${record.provider}
+
+Description:
+${record.description}
+
+${record.content || ''}
+    `.trim();
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${record.title.replace(/\s+/g, '_')}_${record.date}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast({
+      title: "Download started",
+      description: `Downloading ${record.title}`,
+    });
+  };
+
+  const handleLoadMore = () => {
+    setVisibleCount(prev => prev + 10);
+  };
 
   const getIcon = (type: string) => iconMap[type] || FileText;
   return (
@@ -91,12 +149,10 @@ const PatientRecords = () => {
             <Input
               placeholder="Search records..."
               className="pl-10 h-11"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <Button variant="outline">
-            <Filter className="h-4 w-4" />
-            Filter
-          </Button>
         </div>
       </div>
 
@@ -106,18 +162,19 @@ const PatientRecords = () => {
           <div className="healthcare-card">
             <h3 className="font-semibold text-foreground mb-4">Categories</h3>
             <nav className="space-y-1">
-              {categories.map((category, index) => (
+              {categories.map((category) => (
                 <button
                   key={category.label}
+                  onClick={() => setSelectedCategory(category.value)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                    index === 0
+                    selectedCategory === category.value
                       ? "bg-accent text-accent-foreground font-medium"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}
                 >
                   <span>{category.label}</span>
                   <span className="text-xs bg-muted px-2 py-0.5 rounded-full">
-                    {category.count}
+                    {getCategoryCount(category.value)}
                   </span>
                 </button>
               ))}
@@ -136,7 +193,7 @@ const PatientRecords = () => {
               No medical records found
             </div>
           ) : (
-            filteredRecords.map((record) => {
+            filteredRecords.slice(0, visibleCount).map((record) => {
               const IconComponent = getIcon(record.type);
               return (
                 <div
@@ -162,11 +219,21 @@ const PatientRecords = () => {
                     </div>
                   </div>
                   <div className="flex gap-2 sm:flex-col">
-                    <Button variant="outline" size="sm" className="flex-1 sm:flex-none">
-                      <FileText className="h-4 w-4" />
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="flex-1 sm:flex-none"
+                      onClick={() => handleView(record)}
+                    >
+                      <Eye className="h-4 w-4" />
                       View
                     </Button>
-                    <Button variant="ghost" size="sm" className="flex-1 sm:flex-none">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="flex-1 sm:flex-none"
+                      onClick={() => handleDownload(record)}
+                    >
                       <Download className="h-4 w-4" />
                       Download
                     </Button>
@@ -177,13 +244,66 @@ const PatientRecords = () => {
           )}
 
           {/* Load More */}
-          <div className="text-center pt-4">
-            <Button variant="outline">
-              Load More Records
-            </Button>
-          </div>
+          {filteredRecords.length > visibleCount && (
+            <div className="text-center pt-4">
+              <Button variant="outline" onClick={handleLoadMore}>
+                Load More Records ({filteredRecords.length - visibleCount} remaining)
+              </Button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* View Record Dialog */}
+      <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{selectedRecord?.title}</DialogTitle>
+            <DialogDescription>
+              {selectedRecord?.type} • {selectedRecord?.date}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedRecord && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Type</p>
+                  <p className="font-medium">{selectedRecord.type}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Date</p>
+                  <p className="font-medium">{selectedRecord.date}</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Provider</p>
+                <p className="font-medium">{selectedRecord.provider}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Description</p>
+                <p className="font-medium">{selectedRecord.description}</p>
+              </div>
+              {selectedRecord.content && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Details</p>
+                  <div className="mt-2 p-4 bg-muted rounded-lg">
+                    <pre className="whitespace-pre-wrap text-sm">{selectedRecord.content}</pre>
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-4">
+                <Button variant="outline" onClick={() => setShowViewDialog(false)}>
+                  Close
+                </Button>
+                <Button onClick={() => handleDownload(selectedRecord)}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Download
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };
