@@ -8,24 +8,43 @@ import { Link } from "react-router-dom";
 import api from "@/lib/api";
 import { getUser } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
+import { formatDaySlot, formatDayName } from "@/lib/helpers";
 
 interface Appointment {
   _id: string;
   doctorId: string;
-  appointment_date: string;
-  appointment_time: string;
+  doctorName?: string;
+  day: string;
+  slotIndex: number;
   reason: string;
   status: 'scheduled' | 'confirmed' | 'completed' | 'cancelled';
+  
+  // Legacy fields (may exist in old records)
+  appointment_date?: string;
+  appointment_time?: string;
+}
+
+interface MedicalRecord {
+  _id: string;
+  type: string;
+  title: string;
+  description: string;
+  date: string;
+  doctorName?: string;
+  provider?: string;
 }
 
 const PatientDashboard = () => {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [medicalRecords, setMedicalRecords] = useState<MedicalRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [recordsLoading, setRecordsLoading] = useState(true);
   const user = getUser();
   const { toast } = useToast();
 
   useEffect(() => {
     fetchAppointments();
+    fetchMedicalRecords();
   }, []);
 
   const fetchAppointments = async () => {
@@ -33,9 +52,19 @@ const PatientDashboard = () => {
       setIsLoading(true);
       // Backend endpoint: GET /api/appointments/patient
       const response = await api.get('/appointments/patient');
-      // Handle both direct array and wrapped response
-      const data = Array.isArray(response) ? response : response?.data || [];
-      setAppointments(data);
+      // Handle multiple response formats: { appointments: [] }, { data: [] }, or direct array
+      const data = response?.appointments || response?.data || (Array.isArray(response) ? response : []);
+      
+      // STRICT VALIDATION: Filter out appointments without day/slotIndex
+      const validAppointments = data.filter((apt: any) => {
+        const isValid = apt.day && typeof apt.slotIndex === 'number';
+        if (!isValid && apt._id) {
+          console.warn('⚠️ Dashboard: Skipping appointment with legacy schema:', apt._id);
+        }
+        return isValid;
+      });
+      
+      setAppointments(validAppointments);
     } catch (error) {
       toast({
         variant: "destructive",
@@ -48,17 +77,34 @@ const PatientDashboard = () => {
     }
   };
 
+  const fetchMedicalRecords = async () => {
+    try {
+      setRecordsLoading(true);
+      const response = await api.get('/ehr/patient');
+      const data = response?.data || response || [];
+      setMedicalRecords(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error loading medical records:', error);
+      setMedicalRecords([]);
+    } finally {
+      setRecordsLoading(false);
+    }
+  };
+
   // Filter upcoming appointments (not completed or cancelled)
   const upcomingAppointments = appointments
     .filter((apt) => apt.status === 'scheduled' || apt.status === 'confirmed')
     .slice(0, 3);
+
+  // Get recent medical records
+  const recentRecords = medicalRecords.slice(0, 3);
 
   return (
     <DashboardLayout role="patient">
       <div className="page-header">
         <h1 className="page-title">Welcome back, {user?.name || 'Patient'}</h1>
         <p className="page-description">
-          Here's an overview of your health management dashboard
+          Here's an overview of your health management
         </p>
       </div>
 
@@ -68,7 +114,7 @@ const PatientDashboard = () => {
           title="Upcoming Appointments"
           value={upcomingAppointments.length.toString()}
           icon={<Calendar className="h-5 w-5" />}
-          description={upcomingAppointments[0] ? `Next: ${upcomingAppointments[0].appointment_date}` : "No upcoming appointments"}
+          description={upcomingAppointments[0] ? `Next: ${formatDaySlot(upcomingAppointments[0].day, upcomingAppointments[0].slotIndex)}` : "No upcoming appointments"}
         />
         <StatCard
           title="Total Appointments"
@@ -110,21 +156,28 @@ const PatientDashboard = () => {
             </div>
           ) : (
             <div className="space-y-4">
-              {upcomingAppointments.map((appointment) => (
-                <div
-                  key={appointment._id}
-                  className="flex items-start justify-between p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
-                >
-                  <div>
-                    <p className="font-medium text-foreground">Doctor ID: {appointment.doctorId}</p>
-                    <p className="text-sm text-muted-foreground">{appointment.reason}</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {appointment.appointment_date} at {appointment.appointment_time}
-                    </p>
+              {upcomingAppointments.map((appointment) => {
+                // DEFENSIVE: Skip if missing critical fields
+                if (!appointment.day || typeof appointment.slotIndex !== 'number') {
+                  return null;
+                }
+                
+                return (
+                  <div
+                    key={appointment._id}
+                    className="flex items-start justify-between p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                  >
+                    <div>
+                      <p className="font-medium text-foreground">{appointment.doctorName || `Doctor ID: ${appointment.doctorId}`}</p>
+                      <p className="text-sm text-muted-foreground">{appointment.reason}</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {formatDaySlot(appointment.day, appointment.slotIndex)}
+                      </p>
+                    </div>
+                    <StatusBadge status={appointment.status} />
                   </div>
-                  <StatusBadge status={appointment.status} />
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
           <Button variant="ghost" className="w-full mt-4" asChild>
@@ -132,15 +185,43 @@ const PatientDashboard = () => {
           </Button>
         </div>
 
-        {/* Medical Records Placeholder */}
+        {/* Medical Records */}
         <div className="healthcare-card">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="section-title mb-0">Medical Records</h2>
+            <h2 className="section-title mb-0">Recent Medical Records</h2>
           </div>
-          <div className="text-center py-8 text-muted-foreground">
-            <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
-            <p>Medical records feature coming soon</p>
-          </div>
+          {recordsLoading ? (
+            <div className="text-center py-8 text-muted-foreground">
+              Loading records...
+            </div>
+          ) : recentRecords.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p>No medical records yet</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {recentRecords.map((record) => (
+                <div
+                  key={record._id}
+                  className="flex items-start justify-between p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-medium px-2 py-1 rounded bg-primary/10 text-primary">
+                        {record.type}
+                      </span>
+                    </div>
+                    <p className="font-medium text-foreground">{record.title}</p>
+                    <p className="text-sm text-muted-foreground line-clamp-1">{record.description}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {new Date(record.date).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           <Button variant="ghost" className="w-full mt-4" asChild>
             <Link to="/patient/records">View All Records</Link>
           </Button>

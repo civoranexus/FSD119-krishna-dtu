@@ -71,8 +71,8 @@ const Index = () => {
       {/* Hero Section */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 hero-gradient opacity-5" />
-        <div className="container relative py-24 md:py-32">
-          <div className="max-w-3xl mx-auto text-center">
+        <div className="container relative py-24 md:py-32 flex flex-col md:flex-row items-center gap-12">
+          <div className="flex-1 max-w-2xl mx-auto text-center md:text-left">
             <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-foreground mb-6 text-balance animate-fade-in">
               Healthcare Management Made{" "}
               <span className="text-primary">Simple</span>
@@ -81,7 +81,7 @@ const Index = () => {
               HealthVillage connects patients, doctors, and administrators on a single, 
               secure platform designed for modern healthcare delivery.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-in">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center md:justify-start animate-fade-in">
               <Button size="xl" variant="hero" asChild>
                 <Link to="/register">
                   Get Started Free
@@ -92,6 +92,9 @@ const Index = () => {
                 <Link to="/about">Learn More</Link>
               </Button>
             </div>
+          </div>
+          <div className="flex-1 flex justify-center md:justify-end">
+            <img src="/hero.jpg" alt="HealthVillage Hero" className="rounded-2xl shadow-xl w-full max-w-md object-cover" />
           </div>
         </div>
       </section>

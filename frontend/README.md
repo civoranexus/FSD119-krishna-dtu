@@ -1,73 +1,210 @@
-# Welcome to your Lovable project
+# HealthVillage - Frontend
 
-## Project info
+Modern healthcare management system built with React, TypeScript, and Vite.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Features
 
-## How can I edit this code?
+- **Patient Portal**: Book, reschedule, and cancel appointments
+- **Doctor Portal**: Manage availability and view patient appointments
+- **Admin Portal**: System overview and user management
+- **Responsive Design**: Mobile-friendly interface
+- **Type-Safe**: Full TypeScript coverage
+- **Modern UI**: Built with Tailwind CSS and shadcn/ui
 
-There are several ways of editing your application.
+## Tech Stack
 
-**Use Lovable**
+- **React 18** - UI library
+- **TypeScript** - Type safety
+- **Vite** - Build tool and dev server
+- **Tailwind CSS** - Styling
+- **shadcn/ui** - UI components
+- **React Router** - Routing
+- **React Query** - Data fetching (optional)
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+## Getting Started
 
-Changes made via Lovable will be committed automatically to this repo.
+### Prerequisites
 
-**Use your preferred IDE**
+- Node.js 16+ installed
+- npm or yarn package manager
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Installation
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+```bash
+# Install dependencies
+npm install
 
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+# Create .env file
+cp .env.example .env
 ```
 
-**Edit a file directly in GitHub**
+### Environment Variables
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+Create a `.env` file in the frontend directory:
 
-**Use GitHub Codespaces**
+```env
+VITE_API_URL=http://localhost:5000/api
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### Development
 
-## What technologies are used for this project?
+```bash
+# Start development server
+npm run dev
 
-This project is built with:
+# Open browser to http://localhost:5173
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+### Build for Production
 
-## How can I deploy this project?
+```bash
+# Build the application
+npm run build
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+# Preview production build
+npm run preview
+```
 
-## Can I connect a custom domain to my Lovable project?
+## Project Structure
 
-Yes, you can!
+```
+frontend/
+├── src/
+│   ├── components/
+│   │   ├── layout/          # Layout components
+│   │   ├── shared/          # Reusable components
+│   │   └── ui/              # UI primitives (shadcn/ui)
+│   ├── pages/
+│   │   ├── patient/         # Patient portal pages
+│   │   ├── doctor/          # Doctor portal pages
+│   │   └── admin/           # Admin portal pages
+│   ├── lib/
+│   │   ├── api.ts           # API client
+│   │   ├── constants.ts     # App constants
+│   │   ├── helpers.ts       # Utility functions
+│   │   └── utils.ts         # General utilities
+│   ├── hooks/               # Custom React hooks
+│   ├── App.tsx              # Main app component
+│   └── main.tsx             # Entry point
+├── public/                  # Static assets
+└── index.html              # HTML template
+```
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+## Available Scripts
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build
+- `npm run lint` - Run ESLint
+
+## Key Features
+
+### Patient Features
+- Register and login
+- Book appointments with doctors
+- Reschedule existing appointments
+- Cancel appointments
+- View appointment history
+- Search and filter appointments
+
+### Doctor Features
+- Manage weekly availability
+- Add/edit/delete time slots
+- View patient appointments
+- Search and filter appointments
+
+### Admin Features
+- View system statistics
+- Manage users
+- View all appointments
+- Monitor system health
+
+## Development Guidelines
+
+### Adding New Pages
+
+1. Create component in `src/pages/[role]/`
+2. Add route in `src/App.tsx`
+3. Use `DashboardLayout` wrapper
+4. Add loading/empty/error states
+
+### Adding New Components
+
+1. Create in `src/components/shared/` for reusable components
+2. Create in `src/components/ui/` for UI primitives
+3. Export from component file
+4. Add TypeScript types
+
+### Using Constants
+
+Import from `src/lib/constants.ts`:
+```typescript
+import { TIME_SLOTS, APPOINTMENT_STATUS } from '@/lib/constants';
+```
+
+### Using Helpers
+
+Import from `src/lib/helpers.ts`:
+```typescript
+import { formatDate, validateReason } from '@/lib/helpers';
+```
+
+## Styling
+
+This project uses Tailwind CSS with a custom configuration. Key classes:
+
+- `healthcare-card` - Card component
+- `page-header` - Page header
+- `page-title` - Page title
+- `page-description` - Page description
+- `section-title` - Section title
+- `table-container` - Table wrapper
+
+## API Integration
+
+The frontend communicates with the backend API using the `api` client from `src/lib/api.ts`:
+
+```typescript
+import api from '@/lib/api';
+
+// GET request
+const data = await api.get('/appointments/patient');
+
+// POST request
+await api.post('/appointments', { doctor_id, date, time });
+
+// PUT request
+await api.put('/appointments/:id', { date, time });
+
+// PATCH request
+await api.patch('/appointments/:id/cancel');
+```
+
+## Troubleshooting
+
+### Port Already in Use
+
+If port 5173 is already in use, Vite will automatically try the next available port.
+
+### CORS Errors
+
+Make sure the backend is running and `VITE_API_URL` in `.env` points to the correct backend URL.
+
+### Build Errors
+
+Clear node_modules and reinstall:
+```bash
+rm -rf node_modules
+npm install
+```
+
+## Contributing
+
+1. Create a feature branch
+2. Make your changes
+3. Test thoroughly
+4. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details

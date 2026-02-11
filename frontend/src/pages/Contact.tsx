@@ -111,6 +111,15 @@ const Contact = () => {
                 </p>
               </div>
             </div>
+
+            {/* App Illustration */}
+            <div className="hidden lg:block mb-12">
+              <img
+                src="/app-illustration.jpg"
+                alt="App Illustration"
+                className="rounded-2xl shadow-xl w-full max-w-md mx-auto object-cover"
+              />
+            </div>
           </div>
         </div>
       </section>

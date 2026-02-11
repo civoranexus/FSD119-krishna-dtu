@@ -36,6 +36,9 @@ const DoctorDashboard = () => {
 
   useEffect(() => {
     fetchAppointments();
+    // Poll every 15 seconds for real-time updates
+    const interval = setInterval(fetchAppointments, 15000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchAppointments = async () => {
@@ -148,7 +151,41 @@ const DoctorDashboard = () => {
                   </div>
                   <div className="flex items-center gap-3">
                     <StatusBadge status={appointment.status === 'scheduled' ? 'pending' : appointment.status} />
-                    <Button size="sm" variant="outline">View</Button>
+                    <Button size="sm" variant="outline" onClick={() => setSelectedAppointment(appointment)}>View</Button>
+                    {/* Status change actions for doctor */}
+                    {appointment.status === 'scheduled' && (
+                      <Button size="sm" variant="secondary" onClick={async () => {
+                        try {
+                          await api.patch(`/appointments/${appointment._id}/confirm`);
+                          toast({ title: 'Appointment confirmed' });
+                          fetchAppointments();
+                        } catch (err) {
+                          toast({ variant: 'destructive', title: 'Error', description: err instanceof Error ? err.message : 'Failed to confirm' });
+                        }
+                      }}>Confirm</Button>
+                    )}
+                    {appointment.status === 'confirmed' && (
+                      <Button size="sm" variant="secondary" onClick={async () => {
+                        try {
+                          await api.patch(`/appointments/${appointment._id}/complete`);
+                          toast({ title: 'Appointment marked as completed' });
+                          fetchAppointments();
+                        } catch (err) {
+                          toast({ variant: 'destructive', title: 'Error', description: err instanceof Error ? err.message : 'Failed to complete' });
+                        }
+                      }}>Complete</Button>
+                    )}
+                    {(appointment.status === 'scheduled' || appointment.status === 'confirmed') && (
+                      <Button size="sm" variant="destructive" onClick={async () => {
+                        try {
+                          await api.patch(`/appointments/${appointment._id}/cancel`);
+                          toast({ title: 'Appointment cancelled' });
+                          fetchAppointments();
+                        } catch (err) {
+                          toast({ variant: 'destructive', title: 'Error', description: err instanceof Error ? err.message : 'Failed to cancel' });
+                        }
+                      }}>Cancel</Button>
+                    )}
                   </div>
                 </div>
               ))

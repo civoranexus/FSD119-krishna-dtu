@@ -4,6 +4,8 @@ import { authenticate } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/rbac.middleware.js';
 import appointmentRoutes from '../modules/appointments/appointments.routes.js';
 import availabilityRoutes from '../modules/availability/availability.routes.js';
+import userRoutes from '../modules/users/users.routes.js';
+import ehrRoutes from '../modules/ehr/ehr.routes.js';
 
 const router = Router();
 
@@ -20,6 +22,26 @@ router.get('/', (req, res) => {
 router.use('/auth', authRoutes);
 
 /**
+ * User routes
+ */
+router.use('/users', userRoutes);
+
+/**
+ * Availability routes
+ */
+router.use('/availability', availabilityRoutes);
+
+/**
+ * Appointment routes
+ */
+router.use('/appointments', appointmentRoutes);
+
+/**
+ * EHR (Medical Records) routes
+ */
+router.use('/ehr', ehrRoutes);
+
+/**
  * Any authenticated user
  */
 router.get('/protected', authenticate, (req, res) => {
@@ -28,8 +50,6 @@ router.get('/protected', authenticate, (req, res) => {
     user: req.user
   });
 });
-router.use('/availability', availabilityRoutes);
-router.use('/appointments', appointmentRoutes);
 /**
  * Doctor-only route
  */

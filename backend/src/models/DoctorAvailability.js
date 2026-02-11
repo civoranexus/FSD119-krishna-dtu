@@ -9,7 +9,7 @@ const doctorAvailabilitySchema = new mongoose.Schema(
     },
     day_of_week: {
       type: String,
-      enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+      enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
       required: true,
     },
     start_time: {
@@ -20,10 +20,22 @@ const doctorAvailabilitySchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    totalSlots: {
+      type: Number,
+      required: true,
+      min: 1,
+      default: 10,
+    },
   },
   {
     timestamps: true,
   }
+);
+
+// Compound unique index: one availability rule per doctor per day
+doctorAvailabilitySchema.index(
+  { doctorId: 1, day_of_week: 1 },
+  { unique: true }
 );
 
 export const DoctorAvailability = mongoose.model(

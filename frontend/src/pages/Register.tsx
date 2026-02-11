@@ -64,12 +64,23 @@ const Register = () => {
       return;
     }
 
-    // Validate password length
+    // Validate password requirements (must match backend validation)
     if (!formData.password || formData.password.length < 8) {
       toast({
         variant: "destructive",
         title: "Validation error",
         description: "Password must be at least 8 characters",
+      });
+      return;
+    }
+
+    // Check for uppercase, lowercase, and number
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/;
+    if (!passwordRegex.test(formData.password)) {
+      toast({
+        variant: "destructive",
+        title: "Validation error",
+        description: "Password must contain at least one uppercase letter, one lowercase letter, and one number",
       });
       return;
     }
@@ -251,7 +262,7 @@ const Register = () => {
                 disabled={isLoading}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Must be at least 8 characters with a number and symbol
+                Must be at least 8 characters with uppercase, lowercase, and a number
               </p>
             </div>
 

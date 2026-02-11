@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import StatusBadge from "@/components/shared/StatusBadge";
+import { LoadingState } from "@/components/shared/LoadingState";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -10,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Filter, X, Calendar } from "lucide-react";
+import { Plus, Search, Calendar, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,135 +42,495 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import api from "@/lib/api";
+import api, { ApiResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { 
+  TIME_SLOTS, 
+  APPOINTMENT_STATUS, 
+  TOAST_MESSAGES,
+  LOADING_MESSAGES,
+  EMPTY_MESSAGES,
+  VALIDATION,
+} from "@/lib/constants";
+import {
+  formatDayName,
+  formatSlotIndex,
+  formatDaySlot,
+  validateReason,
+  validateRequired,
+  canRescheduleAppointment,
+  canCancelAppointment,
+  parseErrorMessage,
+  formatAvailabilityError,
+} from "@/lib/helpers";
+
+interface Doctor {
+  _id: string;
+  name: string;
+  email: string;
+}
+
+interface DaySlotStatus {
+  status: 'available' | 'fully_booked' | 'unavailable';
+  slotsAvailable: number;
+  totalSlots: number;
+}
+
+interface WeeklyAvailability {
+  monday: DaySlotStatus;
+  tuesday: DaySlotStatus;
+  wednesday: DaySlotStatus;
+  thursday: DaySlotStatus;
+  friday: DaySlotStatus;
+  saturday: DaySlotStatus;
+}
+
+interface DaySlots {
+  day: string;
+  availableSlots: number[];
+}
 
 interface Appointment {
   _id: string;
   doctorId: string;
-  doctorName?: string;
-  specialty?: string;
-  appointment_date: string;
-  appointment_time: string;
+  doctorName: string;
+  specialization: string;
+  day: string;
+  slotIndex: number;
   reason: string;
-  location?: string;
   status: 'scheduled' | 'confirmed' | 'completed' | 'cancelled';
+  
+  // Legacy fields (may exist in old records - will be filtered out)
+  appointment_date?: string;
+  appointment_time?: string;
 }
 
 const PatientAppointments = () => {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [weeklyAvailability, setWeeklyAvailability] = useState<WeeklyAvailability | null>(null);
+  const [daySlots, setDaySlots] = useState<number[]>([]);
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  
+  // Dialog states
   const [showBookDialog, setShowBookDialog] = useState(false);
   const [showRescheduleDialog, setShowRescheduleDialog] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
-  const [showSummaryDialog, setShowSummaryDialog] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  
+  // Form data
   const [bookingData, setBookingData] = useState({
     doctorId: "",
-    date: "",
-    time: "",
+    day: "",
+    slotIndex: -1,
     reason: "",
   });
+  
+  // Validation errors
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [lastSubmitTime, setLastSubmitTime] = useState<number>(0);
+  
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchAppointments();
+    fetchData();
   }, []);
 
-  const fetchAppointments = async () => {
+  const fetchData = async () => {
     try {
       setIsLoading(true);
-      const response = await api.get('/appointments/patient');
-      const data = Array.isArray(response) ? response : response?.data || [];
-      setAppointments(data);
+      setError(null);
+      
+      const [appointmentsRes, doctorsRes] = await Promise.all([
+        api.get<ApiResponse<Appointment[]>>('/appointments/patient'),
+        api.get<Doctor[]>('/users/doctors/list'),
+      ]);
+      
+      const appointmentsData = appointmentsRes.appointments || appointmentsRes.data || [];
+      
+      // STRICT VALIDATION: Filter out legacy appointments without day/slotIndex
+      const validAppointments = Array.isArray(appointmentsData) 
+        ? appointmentsData.filter((apt: any) => {
+            const isValid = apt.day && typeof apt.slotIndex === 'number';
+            if (!isValid) {
+              console.warn('⚠️ Skipping legacy appointment:', apt._id);
+            }
+            return isValid;
+          })
+        : [];
+      
+      setAppointments(validAppointments);
+      setDoctors(Array.isArray(doctorsRes) ? doctorsRes : []);
     } catch (error) {
+      const message = parseErrorMessage(error);
+      setError(message);
       toast({
         variant: "destructive",
-        title: "Error loading appointments",
-        description: error instanceof Error ? error.message : "Failed to fetch appointments",
+        title: "Error loading data",
+        description: message,
       });
-      setAppointments([]);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const fetchDoctorAvailability = async (doctorId: string) => {
+    if (!doctorId) {
+      setWeeklyAvailability(null);
+      setDaySlots([]);
+      return;
+    }
+
+    try {
+      setIsLoadingAvailability(true);
+      const response = await api.get<{success: boolean; data: WeeklyAvailability}>(`/appointments/slots/${doctorId}`);
+      
+      setWeeklyAvailability(response.data);
+      
+      // Reset day and slot when doctor changes
+      setBookingData(prev => ({ ...prev, day: "", slotIndex: -1 }));
+      setDaySlots([]);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error loading availability",
+        description: parseErrorMessage(error),
+      });
+      setWeeklyAvailability(null);
+      setDaySlots([]);
+    } finally {
+      setIsLoadingAvailability(false);
+    }
+  };
+
+  const fetchDaySlots = async (doctorId: string, day: string) => {
+    if (!doctorId || !day) {
+      setDaySlots([]);
+      return;
+    }
+
+    try {
+      setIsLoadingSlots(true);
+      const response = await api.get<{success: boolean; day: string; availableSlots: number[]}>(
+        `/appointments/slots/${doctorId}/${day}`
+      );
+      
+      setDaySlots(response.availableSlots || []);
+      
+      // Reset slot when day changes
+      setBookingData(prev => ({ ...prev, slotIndex: -1 }));
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error loading slots",
+        description: parseErrorMessage(error),
+      });
+      setDaySlots([]);
+    } finally {
+      setIsLoadingSlots(false);
+    }
+  };
+
   const filteredAppointments = appointments.filter(apt => {
-    const matchesSearch = apt.doctorName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    const matchesSearch = 
+      apt.doctorName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       apt.reason?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === "all" || apt.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
+  // Get appropriate empty state message based on filter
+  const getEmptyStateMessage = () => {
+    if (searchTerm) {
+      return {
+        title: "No matching appointments",
+        description: `No appointments found matching "${searchTerm}"`,
+        showAction: false,
+      };
+    }
+    
+    if (statusFilter !== "all") {
+      const statusLabels: Record<string, string> = {
+        [APPOINTMENT_STATUS.SCHEDULED]: "scheduled",
+        [APPOINTMENT_STATUS.CONFIRMED]: "confirmed",
+        [APPOINTMENT_STATUS.COMPLETED]: "completed",
+        [APPOINTMENT_STATUS.CANCELLED]: "cancelled",
+      };
+      const statusLabel = statusLabels[statusFilter] || statusFilter;
+      return {
+        title: `No ${statusLabel} appointments`,
+        description: `You don't have any ${statusLabel} appointments yet.`,
+        showAction: false,
+      };
+    }
+    
+    return {
+      title: EMPTY_MESSAGES.NO_APPOINTMENTS,
+      description: "You haven't booked any appointments yet.",
+      showAction: true,
+    };
+  };
+
+  const validateBookingForm = (): boolean => {
+    const errors: Record<string, string> = {};
+    
+    const doctorError = validateRequired(bookingData.doctorId, "Doctor");
+    if (doctorError) errors.doctorId = doctorError;
+    
+    const dayError = validateRequired(bookingData.day, "Day");
+    if (dayError) errors.day = dayError;
+    
+    if (bookingData.slotIndex < 0) {
+      errors.slotIndex = "Please select a time slot";
+    }
+    
+    const reasonError = validateReason(bookingData.reason);
+    if (reasonError) errors.reason = reasonError;
+    if (reasonError) errors.reason = reasonError;
+    
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleBookAppointment = async () => {
-    try {
-      await api.post('/appointments', {
-        ...bookingData,
-        appointment_date: bookingData.date,
-        appointment_time: bookingData.time,
-      });
-      toast({
-        title: "Appointment booked",
-        description: "Your appointment has been scheduled successfully.",
-      });
-      setShowBookDialog(false);
-      setBookingData({ doctorId: "", date: "", time: "", reason: "" });
-      fetchAppointments();
-    } catch (error) {
+    // Prevent double-click submissions (debounce 2 seconds)
+    const now = Date.now();
+    if (now - lastSubmitTime < 2000) {
+      console.log('⏸️ Debounced - too soon after last submit');
+      return;
+    }
+    setLastSubmitTime(now);
+
+    if (!validateBookingForm()) {
       toast({
         variant: "destructive",
-        title: "Booking failed",
-        description: error instanceof Error ? error.message : "Failed to book appointment",
+        title: "Validation Error",
+        description: "Please fill in all required fields correctly.",
       });
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      
+      console.log('📤 Booking Request:', {
+        doctor_id: bookingData.doctorId,
+        day: bookingData.day,
+        slotIndex: bookingData.slotIndex,
+        reason: bookingData.reason.trim(),
+      });
+      
+      await api.post('/appointments', {
+        doctor_id: bookingData.doctorId,
+        day: bookingData.day,
+        slotIndex: bookingData.slotIndex,
+        reason: bookingData.reason.trim(),
+      });
+      
+      toast({
+        title: "Success",
+        description: TOAST_MESSAGES.APPOINTMENT_BOOKED,
+      });
+      
+      setShowBookDialog(false);
+      resetBookingForm();
+      fetchData();
+    } catch (error: any) {
+      console.error('❌ Booking Error:', error);
+      
+      // Parse error response (new standardized format)
+      const errorCode = error.errorCode || error.response?.data?.errorCode;
+      const errorMessage = error.message || error.response?.data?.message;
+      const availableSlots = error.response?.data?.availableSlots;
+      
+      // Handle Sunday-specific error
+      if (errorCode === 'SUNDAY_CLOSED') {
+        toast({
+          variant: "destructive",
+          title: "Sunday Not Available",
+          description: "Doctors are not available on Sundays. Please select a weekday.",
+          duration: 5000,
+        });
+        return;
+      }
+      
+      // Handle structured availability error (INVALID_SLOT, NO_AVAILABILITY, etc.)
+      if (errorCode && ['INVALID_SLOT', 'NO_AVAILABILITY', 'OUTSIDE_HOURS'].includes(errorCode)) {
+        const selectedDoctor = doctors.find(d => d._id === bookingData.doctorId);
+        const errorMsg = `Slot not available. Please select a different time slot.`;
+        
+        toast({
+          variant: "destructive",
+          title: "Invalid Time Slot",
+          description: errorMsg,
+          duration: 6000,
+        });
+        
+        // Refresh availability data
+        if (bookingData.doctorId) {
+          await fetchDoctorAvailability(bookingData.doctorId);
+        }
+      } else if (errorCode === 'DUPLICATE_BOOKING' || errorMessage?.includes('already have an appointment')) {
+        toast({
+          variant: "destructive",
+          title: "Duplicate Booking",
+          description: "You already have an appointment at this time with this doctor.",
+          duration: 5000,
+        });
+      } else if (errorMessage?.includes('not available')) {
+        toast({
+          variant: "destructive",
+          title: "Doctor Not Available",
+          description: "The selected doctor is not available at this time. Please choose a different time slot.",
+          duration: 5000,
+        });
+        
+        // Refresh availability to show updated slots
+        if (bookingData.doctorId) {
+          await fetchDoctorAvailability(bookingData.doctorId);
+        }
+      } else if (errorMessage?.includes('no longer available')) {
+        toast({
+          variant: "destructive",
+          title: "Slot Already Booked",
+          description: "This time slot was just booked by another patient. Please select a different time.",
+          duration: 5000,
+        });
+        
+        // Refresh availability to show updated slots
+        if (bookingData.doctorId) {
+          await fetchDoctorAvailability(bookingData.doctorId);
+        }
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Booking failed",
+          description: errorMessage || parseErrorMessage(error),
+        });
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleReschedule = async () => {
     if (!selectedAppointment) return;
+    
+    const errors: Record<string, string> = {};
+    const dayError = validateRequired(bookingData.day, "Day");
+    if (dayError) errors.day = dayError;
+    if (bookingData.slotIndex < 0) errors.slotIndex = "Please select a time slot";
+    
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors);
+      return;
+    }
+
     try {
+      setIsSubmitting(true);
       await api.put(`/appointments/${selectedAppointment._id}`, {
-        appointment_date: bookingData.date,
-        appointment_time: bookingData.time,
+        day: bookingData.day,
+        slotIndex: bookingData.slotIndex,
       });
+      
       toast({
-        title: "Appointment rescheduled",
-        description: "Your appointment has been rescheduled successfully.",
+        title: "Success",
+        description: TOAST_MESSAGES.APPOINTMENT_RESCHEDULED,
       });
+      
       setShowRescheduleDialog(false);
       setSelectedAppointment(null);
-      fetchAppointments();
+      resetBookingForm();
+      fetchData();
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Reschedule failed",
-        description: error instanceof Error ? error.message : "Failed to reschedule",
+        description: parseErrorMessage(error),
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCancel = async () => {
     if (!selectedAppointment) return;
+    
     try {
-      await api.put(`/appointments/${selectedAppointment._id}`, {
-        status: "cancelled",
-      });
+      setIsSubmitting(true);
+      await api.patch(`/appointments/${selectedAppointment._id}/cancel`);
+      
       toast({
-        title: "Appointment cancelled",
-        description: "Your appointment has been cancelled.",
+        title: "Success",
+        description: TOAST_MESSAGES.APPOINTMENT_CANCELLED,
       });
+      
       setShowCancelDialog(false);
       setSelectedAppointment(null);
-      fetchAppointments();
+      fetchData();
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Cancellation failed",
-        description: error instanceof Error ? error.message : "Failed to cancel",
+        description: parseErrorMessage(error),
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
+
+  const resetBookingForm = () => {
+    setBookingData({ doctorId: "", day: "", slotIndex: -1, reason: "" });
+    setValidationErrors({});
+    setWeeklyAvailability(null);
+    setDaySlots([]);
+  };
+
+  const openBookDialog = () => {
+    resetBookingForm();
+    setShowBookDialog(true);
+  };
+
+  const openRescheduleDialog = (appointment: Appointment) => {
+    setSelectedAppointment(appointment);
+    setBookingData({
+      doctorId: appointment.doctorId,
+      day: "",
+      slotIndex: -1,
+      reason: appointment.reason,
+    });
+    setValidationErrors({});
+    // Fetch availability for this doctor
+    fetchDoctorAvailability(appointment.doctorId);
+    setShowRescheduleDialog(true);
+  };
+
+  const openCancelDialog = (appointment: Appointment) => {
+    setSelectedAppointment(appointment);
+    setShowCancelDialog(true);
+  };
+
+  if (isLoading) {
+    return (
+      <DashboardLayout role="patient">
+        <LoadingState message={LOADING_MESSAGES.APPOINTMENTS} />
+      </DashboardLayout>
+    );
+  }
+
+  if (error && appointments.length === 0) {
+    return (
+      <DashboardLayout role="patient">
+        <ErrorState message={error} onRetry={fetchData} />
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout role="patient">
@@ -178,8 +541,8 @@ const PatientAppointments = () => {
             Manage your upcoming and past appointments
           </p>
         </div>
-        <Button onClick={() => setShowBookDialog(true)}>
-          <Plus className="h-4 w-4" />
+        <Button onClick={openBookDialog} disabled={doctors.length === 0}>
+          <Plus className="h-4 w-4 mr-2" />
           Book Appointment
         </Button>
       </div>
@@ -196,128 +559,181 @@ const PatientAppointments = () => {
           />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[150px] h-11">
+          <SelectTrigger className="w-full sm:w-[180px] h-11">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="scheduled">Scheduled</SelectItem>
-            <SelectItem value="confirmed">Confirmed</SelectItem>
-            <SelectItem value="completed">Completed</SelectItem>
-            <SelectItem value="cancelled">Cancelled</SelectItem>
+            <SelectItem value={APPOINTMENT_STATUS.SCHEDULED}>Scheduled</SelectItem>
+            <SelectItem value={APPOINTMENT_STATUS.CONFIRMED}>Confirmed</SelectItem>
+            <SelectItem value={APPOINTMENT_STATUS.COMPLETED}>Completed</SelectItem>
+            <SelectItem value={APPOINTMENT_STATUS.CANCELLED}>Cancelled</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
-      {/* Table */}
-      <div className="table-container">
+      {/* Table - Desktop */}
+      <div className="hidden md:block table-container">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Healthcare Provider</TableHead>
-              <TableHead>Date & Time</TableHead>
-              <TableHead className="hidden md:table-cell">Reason</TableHead>
+              <TableHead>Day & Slot</TableHead>
+              <TableHead>Reason</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
+            {filteredAppointments.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                  Loading appointments...
-                </TableCell>
-              </TableRow>
-            ) : filteredAppointments.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                  No appointments found
+                <TableCell colSpan={5}>
+                  <EmptyState
+                    icon={Calendar}
+                    title={getEmptyStateMessage().title}
+                    description={getEmptyStateMessage().description}
+                    action={getEmptyStateMessage().showAction ? {
+                      label: "Book Appointment",
+                      onClick: openBookDialog,
+                    } : undefined}
+                  />
                 </TableCell>
               </TableRow>
             ) : (
-              filteredAppointments.map((appointment) => (
-                <TableRow key={appointment._id}>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium text-foreground">{appointment.doctorName || 'Doctor'}</p>
-                      <p className="text-sm text-muted-foreground">{appointment.specialty || 'Specialist'}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium text-foreground">{appointment.appointment_date}</p>
-                      <p className="text-sm text-muted-foreground">{appointment.appointment_time}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <p className="text-muted-foreground">{appointment.reason}</p>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={appointment.status === 'scheduled' ? 'pending' : appointment.status} />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      {(appointment.status === "scheduled" || appointment.status === "confirmed") && (
-                        <>
+              filteredAppointments.map((appointment) => {
+                // DEFENSIVE: Skip if missing critical fields
+                if (!appointment.day || typeof appointment.slotIndex !== 'number') {
+                  return null;
+                }
+                
+                return (
+                  <TableRow key={appointment._id}>
+                    <TableCell>
+                      <p className="font-medium text-foreground">
+                        {appointment.doctorName || 'Doctor'}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {appointment.specialization || 'N/A'}
+                      </p>
+                    </TableCell>
+                    <TableCell>
+                      <div>
+                        <p className="font-medium text-foreground">
+                          {formatDayName(appointment.day)}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatSlotIndex(appointment.slotIndex)}
+                        </p>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <p className="text-muted-foreground max-w-xs truncate">
+                        {appointment.reason}
+                      </p>
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={appointment.status} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        {canRescheduleAppointment(appointment.status) && (
                           <Button 
                             variant="outline" 
                             size="sm"
-                            onClick={() => {
-                              setSelectedAppointment(appointment);
-                              setBookingData({
-                                ...bookingData,
-                                date: appointment.appointment_date,
-                                time: appointment.appointment_time,
-                              });
-                              setShowRescheduleDialog(true);
-                            }}
+                            onClick={() => openRescheduleDialog(appointment)}
                           >
                             Reschedule
                           </Button>
+                        )}
+                        {canCancelAppointment(appointment.status) && (
                           <Button 
                             variant="ghost" 
                             size="sm" 
                             className="text-destructive hover:text-destructive"
-                            onClick={() => {
-                              setSelectedAppointment(appointment);
-                              setShowCancelDialog(true);
-                            }}
+                            onClick={() => openCancelDialog(appointment)}
                           >
                             Cancel
                           </Button>
-                        </>
-                      )}
-                      {appointment.status === "completed" && (
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => {
-                            setSelectedAppointment(appointment);
-                            setShowSummaryDialog(true);
-                          }}
-                        >
-                          View Summary
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
       </div>
 
-      {/* Pagination */}
-      <div className="flex items-center justify-between mt-6">
-        <p className="text-sm text-muted-foreground">
-          Showing {filteredAppointments.length} appointments
-        </p>
+      {/* Cards - Mobile */}
+      <div className="md:hidden space-y-4">
+        {filteredAppointments.length === 0 ? (
+          <EmptyState
+            icon={Calendar}
+            title={getEmptyStateMessage().title}
+            description={getEmptyStateMessage().description}
+            action={getEmptyStateMessage().showAction ? {
+              label: "Book Appointment",
+              onClick: openBookDialog,
+            } : undefined}
+          />
+        ) : (
+          filteredAppointments.map((appointment) => {
+            // DEFENSIVE: Skip if missing critical fields
+            if (!appointment.day || typeof appointment.slotIndex !== 'number') {
+              return null;
+            }
+            
+            return (
+              <div key={appointment._id} className="healthcare-card p-4">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <p className="font-medium text-foreground">
+                      {appointment.doctorName || 'Doctor'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {appointment.specialization || 'N/A'}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {formatDaySlot(appointment.day, appointment.slotIndex)}
+                    </p>
+                  </div>
+                  <StatusBadge status={appointment.status} />
+                </div>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {appointment.reason}
+                </p>
+                <div className="flex gap-2">
+                {canRescheduleAppointment(appointment.status) && (
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => openRescheduleDialog(appointment)}
+                  >
+                    Reschedule
+                  </Button>
+                )}
+                {canCancelAppointment(appointment.status) && (
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="flex-1 text-destructive hover:text-destructive"
+                    onClick={() => openCancelDialog(appointment)}
+                  >
+                    Cancel
+                  </Button>
+                )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Book Appointment Dialog */}
       <Dialog open={showBookDialog} onOpenChange={setShowBookDialog}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle>Book New Appointment</DialogTitle>
             <DialogDescription>
@@ -325,49 +741,178 @@ const PatientAppointments = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="input-group">
-              <Label>Preferred Date</Label>
-              <Input
-                type="date"
-                value={bookingData.date}
-                onChange={(e) => setBookingData({ ...bookingData, date: e.target.value })}
-                min={new Date().toISOString().split('T')[0]}
-              />
-            </div>
-            <div className="input-group">
-              <Label>Preferred Time</Label>
+            <div className="space-y-2">
+              <Label htmlFor="doctor">Doctor *</Label>
               <Select
-                value={bookingData.time}
-                onValueChange={(value) => setBookingData({ ...bookingData, time: value })}
+                value={bookingData.doctorId}
+                onValueChange={(value) => {
+                  setBookingData({ ...bookingData, doctorId: value });
+                  setValidationErrors({ ...validationErrors, doctorId: "" });
+                  fetchDoctorAvailability(value);
+                }}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select time" />
+                <SelectTrigger id="doctor" className={validationErrors.doctorId ? "border-destructive" : ""}>
+                  <SelectValue placeholder="Select a doctor" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="09:00">9:00 AM</SelectItem>
-                  <SelectItem value="10:00">10:00 AM</SelectItem>
-                  <SelectItem value="11:00">11:00 AM</SelectItem>
-                  <SelectItem value="14:00">2:00 PM</SelectItem>
-                  <SelectItem value="15:00">3:00 PM</SelectItem>
-                  <SelectItem value="16:00">4:00 PM</SelectItem>
+                  {doctors.map((doctor) => (
+                    <SelectItem key={doctor._id} value={doctor._id}>
+                      {doctor.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {validationErrors.doctorId && (
+                <p className="text-sm text-destructive flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  {validationErrors.doctorId}
+                </p>
+              )}
+              {isLoadingAvailability && (
+                <p className="text-sm text-muted-foreground">Loading availability...</p>
+              )}
+              {weeklyAvailability && Object.values(weeklyAvailability).every(day => day.status === 'unavailable') && (
+                <p className="text-sm text-amber-600">This doctor has no available slots this week.</p>
+              )}
+              {weeklyAvailability && Object.entries(weeklyAvailability).some(([_, day]) => day.slotsAvailable > 0) && (
+                <div className="text-sm text-green-600 space-y-1">
+                  <p className="font-medium">Available Days:</p>
+                  <p className="text-xs">
+                    {Object.entries(weeklyAvailability)
+                      .filter(([_, day]) => day.slotsAvailable > 0)
+                      .map(([dayName, day]) => `${formatDayName(dayName)} (${day.slotsAvailable} slots)`)
+                      .join(', ')}
+                  </p>
+                </div>
+              )}
             </div>
-            <div className="input-group">
-              <Label>Reason for Visit</Label>
+
+            <div className="space-y-2">
+              <Label htmlFor="day">Select Day *</Label>
+              <Select
+                value={bookingData.day}
+                onValueChange={(value) => {
+                  setBookingData({ ...bookingData, day: value, slotIndex: -1 });
+                  setValidationErrors({ ...validationErrors, day: "", slotIndex: "" });
+                  fetchDaySlots(bookingData.doctorId, value);
+                }}
+                disabled={!weeklyAvailability}
+              >
+                <SelectTrigger id="day" className={validationErrors.day ? "border-destructive" : ""}>
+                  <SelectValue placeholder={
+                    !weeklyAvailability 
+                      ? "Select doctor first" 
+                      : "Select a day"
+                  } />
+                </SelectTrigger>
+                <SelectContent>
+                  {weeklyAvailability && Object.entries(weeklyAvailability).map(([dayName, dayStatus]) => (
+                    <SelectItem 
+                      key={dayName} 
+                      value={dayName}
+                      disabled={dayStatus.slotsAvailable === 0}
+                    >
+                      {formatDayName(dayName)} 
+                      {dayStatus.slotsAvailable > 0 
+                        ? ` (${dayStatus.slotsAvailable} slots available)` 
+                        : ' (No slots)'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {validationErrors.day && (
+                <p className="text-sm text-destructive flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  {validationErrors.day}
+                </p>
+              )}
+              {!weeklyAvailability && (
+                <p className="text-xs text-muted-foreground">Select a doctor first to see available days</p>
+              )}
+              {weeklyAvailability && Object.values(weeklyAvailability).every(day => day.slotsAvailable === 0) && (
+                <p className="text-xs text-amber-600">
+                  No available slots found. Doctor may not have set their availability yet.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="slot">Select Time Slot *</Label>
+              {isLoadingSlots && (
+                <p className="text-sm text-muted-foreground">Loading slots...</p>
+              )}
+              {!bookingData.day && (
+                <p className="text-xs text-muted-foreground">Select a day first to see available time slots</p>
+              )}
+              {bookingData.day && daySlots.length === 0 && !isLoadingSlots && (
+                <p className="text-sm text-amber-600">No available slots for this day</p>
+              )}
+              {bookingData.day && daySlots.length > 0 && (
+                <div className="grid grid-cols-2 gap-2">
+                  {daySlots.map((slotIndex) => (
+                    <Button
+                      key={slotIndex}
+                      type="button"
+                      variant={bookingData.slotIndex === slotIndex ? "default" : "outline"}
+                      className="w-full"
+                      onClick={() => {
+                        setBookingData({ ...bookingData, slotIndex });
+                        setValidationErrors({ ...validationErrors, slotIndex: "" });
+                      }}
+                    >
+                      {formatSlotIndex(slotIndex)}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              {validationErrors.slotIndex && (
+                <p className="text-sm text-destructive flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  {validationErrors.slotIndex}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="reason">Reason for Visit *</Label>
               <Textarea
-                placeholder="Describe the reason for your appointment..."
+                id="reason"
+                placeholder="Describe the reason for your appointment (minimum 10 characters)..."
                 value={bookingData.reason}
-                onChange={(e) => setBookingData({ ...bookingData, reason: e.target.value })}
+                onChange={(e) => {
+                  setBookingData({ ...bookingData, reason: e.target.value });
+                  setValidationErrors({ ...validationErrors, reason: "" });
+                }}
+                rows={4}
+                maxLength={VALIDATION.MAX_REASON_LENGTH}
+                className={validationErrors.reason ? "border-destructive" : ""}
               />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>
+                  {validationErrors.reason && (
+                    <span className="text-destructive flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" />
+                      {validationErrors.reason}
+                    </span>
+                  )}
+                </span>
+                <span>{bookingData.reason.length}/{VALIDATION.MAX_REASON_LENGTH}</span>
+              </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowBookDialog(false)}>
+            <Button 
+              variant="outline" 
+              onClick={() => setShowBookDialog(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
-            <Button onClick={handleBookAppointment}>
-              Book Appointment
+            <Button 
+              onClick={handleBookAppointment}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? "Booking..." : "Book Appointment"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -375,49 +920,97 @@ const PatientAppointments = () => {
 
       {/* Reschedule Dialog */}
       <Dialog open={showRescheduleDialog} onOpenChange={setShowRescheduleDialog}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle>Reschedule Appointment</DialogTitle>
             <DialogDescription>
               Select a new date and time for your appointment
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="input-group">
-              <Label>New Date</Label>
-              <Input
-                type="date"
-                value={bookingData.date}
-                onChange={(e) => setBookingData({ ...bookingData, date: e.target.value })}
-                min={new Date().toISOString().split('T')[0]}
-              />
+          {selectedAppointment && (
+            <div className="bg-muted p-3 rounded-lg mb-4">
+              <p className="text-sm font-medium">{selectedAppointment.doctorName}</p>
+              <p className="text-xs text-muted-foreground">
+                Current: {formatDaySlot(selectedAppointment.day, selectedAppointment.slotIndex)}
+              </p>
             </div>
-            <div className="input-group">
-              <Label>New Time</Label>
+          )}
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="reschedule-day">New Day *</Label>
               <Select
-                value={bookingData.time}
-                onValueChange={(value) => setBookingData({ ...bookingData, time: value })}
+                value={bookingData.day}
+                onValueChange={(value) => {
+                  setBookingData({ ...bookingData, day: value, slotIndex: -1 });
+                  setValidationErrors({ ...validationErrors, day: "", slotIndex: "" });
+                  if (selectedAppointment) {
+                    fetchDaySlots(selectedAppointment.doctorId, value);
+                  }
+                }}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select time" />
+                <SelectTrigger id="reschedule-day" className={validationErrors.day ? "border-destructive" : ""}>
+                  <SelectValue placeholder="Select a day" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="09:00">9:00 AM</SelectItem>
-                  <SelectItem value="10:00">10:00 AM</SelectItem>
-                  <SelectItem value="11:00">11:00 AM</SelectItem>
-                  <SelectItem value="14:00">2:00 PM</SelectItem>
-                  <SelectItem value="15:00">3:00 PM</SelectItem>
-                  <SelectItem value="16:00">4:00 PM</SelectItem>
+                  {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].map((day) => (
+                    <SelectItem key={day} value={day}>
+                      {formatDayName(day)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {validationErrors.day && (
+                <p className="text-sm text-destructive">{validationErrors.day}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>New Time Slot *</Label>
+              {isLoadingSlots && (
+                <p className="text-sm text-muted-foreground">Loading slots...</p>
+              )}
+              {!bookingData.day && (
+                <p className="text-xs text-muted-foreground">Select a day first to see available time slots</p>
+              )}
+              {bookingData.day && daySlots.length === 0 && !isLoadingSlots && (
+                <p className="text-sm text-amber-600">No available slots for this day</p>
+              )}
+              {bookingData.day && daySlots.length > 0 && (
+                <div className="grid grid-cols-2 gap-2">
+                  {daySlots.map((slotIndex) => (
+                    <Button
+                      key={slotIndex}
+                      type="button"
+                      variant={bookingData.slotIndex === slotIndex ? "default" : "outline"}
+                      className="w-full"
+                      onClick={() => {
+                        setBookingData({ ...bookingData, slotIndex });
+                        setValidationErrors({ ...validationErrors, slotIndex: "" });
+                      }}
+                    >
+                      {formatSlotIndex(slotIndex)}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              {validationErrors.slotIndex && (
+                <p className="text-sm text-destructive">{validationErrors.slotIndex}</p>
+              )}
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowRescheduleDialog(false)}>
+            <Button 
+              variant="outline" 
+              onClick={() => setShowRescheduleDialog(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
-            <Button onClick={handleReschedule}>
-              Confirm Reschedule
+            <Button 
+              onClick={handleReschedule}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? "Rescheduling..." : "Confirm Reschedule"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -430,71 +1023,33 @@ const PatientAppointments = () => {
             <AlertDialogTitle>Cancel Appointment?</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to cancel this appointment? This action cannot be undone.
-              {selectedAppointment && (
-                <div className="mt-4 p-3 bg-muted rounded-lg">
-                  <p className="font-medium">{selectedAppointment.doctorName || 'Doctor'}</p>
-                  <p className="text-sm">{selectedAppointment.appointment_date} at {selectedAppointment.appointment_time}</p>
-                </div>
-              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {selectedAppointment && (
+            <div className="bg-muted p-3 rounded-lg">
+              <p className="font-medium">{selectedAppointment.doctorName || 'Doctor'}</p>
+              <p className="text-sm text-muted-foreground">
+                {formatDaySlot(selectedAppointment.day, selectedAppointment.slotIndex)}
+              </p>
+              <p className="text-sm text-muted-foreground mt-2">
+                {selectedAppointment.reason}
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep Appointment</AlertDialogCancel>
-            <AlertDialogAction onClick={handleCancel} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Yes, Cancel
+            <AlertDialogCancel disabled={isSubmitting}>
+              Keep Appointment
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleCancel}
+              disabled={isSubmitting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isSubmitting ? "Cancelling..." : "Yes, Cancel"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* View Summary Dialog */}
-      <Dialog open={showSummaryDialog} onOpenChange={setShowSummaryDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Appointment Summary</DialogTitle>
-            <DialogDescription>
-              Details and notes from your completed appointment
-            </DialogDescription>
-          </DialogHeader>
-          {selectedAppointment && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Provider</p>
-                  <p className="font-medium">{selectedAppointment.doctorName || 'Doctor'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Specialty</p>
-                  <p className="font-medium">{selectedAppointment.specialty || 'General'}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Date</p>
-                  <p className="font-medium">{selectedAppointment.appointment_date}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Time</p>
-                  <p className="font-medium">{selectedAppointment.appointment_time}</p>
-                </div>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Reason for Visit</p>
-                <p className="font-medium">{selectedAppointment.reason}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Status</p>
-                <StatusBadge status="completed" />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={() => setShowSummaryDialog(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </DashboardLayout>
   );
 };

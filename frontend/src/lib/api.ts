@@ -3,10 +3,30 @@
  * Handles all HTTP requests to backend with automatic JWT token attachment
  */
 
+import { TOAST_MESSAGES } from './constants';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 interface ApiOptions extends RequestInit {
   requiresAuth?: boolean;
+}
+
+/**
+ * Standardized API response format
+ */
+export interface ApiResponse<T = any> {
+  data?: T;
+  appointments?: T;
+  users?: T;
+  availability?: T;
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
+  message?: string;
+  error?: string;
 }
 
 /**
@@ -33,12 +53,6 @@ export async function apiRequest<T = any>(
   }
 
   const url = `${API_BASE_URL}${endpoint}`;
-  
-  // Log outgoing request
-  console.log(`📤 API REQUEST: ${fetchOptions.method || 'GET'} ${url}`, {
-    body: fetchOptions.body ? JSON.parse(fetchOptions.body as string) : undefined,
-    hasAuth: requiresAuth && !!localStorage.getItem('token'),
-  });
 
   try {
     const response = await fetch(url, {
@@ -49,26 +63,34 @@ export async function apiRequest<T = any>(
     // Parse response body
     const data = await response.json().catch(() => null);
 
-    // Log response
-    console.log(`📥 API RESPONSE: ${response.status}`, {
-      endpoint,
-      data,
-    });
-
     if (!response.ok) {
+      // Handle authentication errors
+      if (response.status === 401) {
+        // Clear auth data and redirect to login
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+        throw new Error(TOAST_MESSAGES.ERROR_AUTH);
+      }
+
       // Extract error message from backend response
-      const errorMessage = data?.error || data?.message || `HTTP ${response.status}: ${response.statusText}`;
-      console.error(`❌ API ERROR: ${endpoint}`, errorMessage);
+      const errorMessage = 
+        data?.error || 
+        data?.message || 
+        (data?.details && Array.isArray(data.details) 
+          ? data.details.map((d: any) => d.message).join(', ')
+          : null) ||
+        `HTTP ${response.status}: ${response.statusText}`;
+      
       throw new Error(errorMessage);
     }
 
     return data;
   } catch (error) {
     if (error instanceof Error) {
-      console.error(`❌ API EXCEPTION: ${endpoint}`, error.message);
       throw error;
     }
-    throw new Error('An unexpected error occurred');
+    throw new Error(TOAST_MESSAGES.ERROR_GENERIC);
   }
 }
 
@@ -77,15 +99,11 @@ export async function apiRequest<T = any>(
  */
 export async function healthCheck(): Promise<boolean> {
   try {
-    console.log('🏥 HEALTH CHECK: Testing backend connectivity...');
     const response = await fetch(`${API_BASE_URL.replace('/api', '')}/health`, {
       method: 'GET',
     });
-    const isHealthy = response.ok;
-    console.log(`${isHealthy ? '✅' : '❌'} HEALTH CHECK: Backend is ${isHealthy ? 'online' : 'offline'}`);
-    return isHealthy;
+    return response.ok;
   } catch (error) {
-    console.error('❌ HEALTH CHECK FAILED:', error instanceof Error ? error.message : 'Unknown error');
     return false;
   }
 }

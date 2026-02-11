@@ -3,9 +3,13 @@ import { Button } from "@/components/ui/button";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { getUser, isAuthenticated, getUserRole, logout } from "@/lib/auth";
+import { UserCircle, LogOut, LayoutDashboard } from "lucide-react";
+import logo from '/logo.png';
 
 const Navbar = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname === path;
@@ -17,13 +21,15 @@ const Navbar = () => {
     { href: "/faq", label: "FAQ" },
   ];
 
+  const user = getUser();
+  const authenticated = isAuthenticated();
+  const userRole = getUserRole();
+
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center justify-between">
         <Link to="/" className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg hero-gradient">
-            <span className="text-lg font-bold text-primary-foreground">H</span>
-          </div>
+          <img src={logo} alt="HealthVillage Logo" className="h-14 w-14 rounded-lg" />
           <span className="text-xl font-semibold text-foreground">HealthVillage</span>
         </Link>
 
@@ -43,14 +49,41 @@ const Navbar = () => {
           ))}
         </nav>
 
-        {/* Desktop Auth Buttons */}
+        {/* Desktop Auth/Profile */}
         <div className="hidden md:flex items-center gap-3">
-          <Button variant="ghost" asChild>
-            <Link to="/login">Sign In</Link>
-          </Button>
-          <Button asChild>
-            <Link to="/register">Get Started</Link>
-          </Button>
+          {!authenticated ? (
+            <Button variant="ghost" asChild>
+              <Link to="/login">Sign In</Link>
+            </Button>
+          ) : (
+            <div className="relative">
+              <button
+                className="flex items-center gap-2 px-3 py-2 rounded-full bg-muted hover:bg-muted/70 transition-colors"
+                onClick={() => setProfileOpen((v) => !v)}
+                aria-label="Profile"
+              >
+                <UserCircle className="h-6 w-6 text-primary" />
+                <span className="sr-only">Profile</span>
+              </button>
+              {profileOpen && (
+                <div className="absolute right-0 mt-2 w-44 bg-white border border-border rounded-lg shadow-lg z-50">
+                  <Link
+                    to={userRole === 'admin' ? '/admin/dashboard' : userRole === 'doctor' ? '/doctor/dashboard' : '/patient/dashboard'}
+                    className="flex items-center gap-2 px-4 py-3 hover:bg-muted/30 text-foreground"
+                    onClick={() => { setProfileOpen(false); setMobileMenuOpen(false); }}
+                  >
+                    <LayoutDashboard className="h-4 w-4" /> Dashboard
+                  </Link>
+                  <button
+                    className="flex items-center gap-2 px-4 py-3 w-full hover:bg-muted/30 text-foreground"
+                    onClick={() => { logout(); window.location.href = '/'; }}
+                  >
+                    <LogOut className="h-4 w-4" /> Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Mobile Menu Button */}
@@ -81,12 +114,39 @@ const Navbar = () => {
               </Link>
             ))}
             <div className="flex flex-col gap-2 pt-4 border-t border-border mt-2">
-              <Button variant="outline" asChild className="w-full">
-                <Link to="/login" onClick={() => setMobileMenuOpen(false)}>Sign In</Link>
-              </Button>
-              <Button asChild className="w-full">
-                <Link to="/register" onClick={() => setMobileMenuOpen(false)}>Get Started</Link>
-              </Button>
+              {!authenticated ? (
+                <Button variant="outline" asChild className="w-full">
+                  <Link to="/login" onClick={() => setMobileMenuOpen(false)}>Sign In</Link>
+                </Button>
+              ) : (
+                <div className="relative w-full">
+                  <button
+                    className="flex items-center gap-2 px-3 py-2 rounded-full bg-muted hover:bg-muted/70 transition-colors w-full justify-center"
+                    onClick={() => setProfileOpen((v) => !v)}
+                    aria-label="Profile"
+                  >
+                    <UserCircle className="h-6 w-6 text-primary" />
+                    <span className="sr-only">Profile</span>
+                  </button>
+                  {profileOpen && (
+                    <div className="absolute right-0 mt-2 w-44 bg-white border border-border rounded-lg shadow-lg z-50">
+                      <Link
+                        to={userRole === 'admin' ? '/admin/dashboard' : userRole === 'doctor' ? '/doctor/dashboard' : '/patient/dashboard'}
+                        className="flex items-center gap-2 px-4 py-3 hover:bg-muted/30 text-foreground"
+                        onClick={() => { setProfileOpen(false); setMobileMenuOpen(false); }}
+                      >
+                        <LayoutDashboard className="h-4 w-4" /> Dashboard
+                      </Link>
+                      <button
+                        className="flex items-center gap-2 px-4 py-3 w-full hover:bg-muted/30 text-foreground"
+                        onClick={() => { logout(); window.location.href = '/'; }}
+                      >
+                        <LogOut className="h-4 w-4" /> Logout
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </nav>
         </div>

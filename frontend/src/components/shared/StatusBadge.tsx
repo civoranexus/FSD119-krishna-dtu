@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-type Status = "pending" | "confirmed" | "cancelled" | "completed";
+type Status = "scheduled" | "confirmed" | "cancelled" | "completed" | "pending";
 
 interface StatusBadgeProps {
   status: Status;
@@ -8,6 +8,7 @@ interface StatusBadgeProps {
 }
 
 const statusConfig: Record<Status, { label: string; className: string }> = {
+  scheduled: { label: "Scheduled", className: "status-pending" },
   pending: { label: "Pending", className: "status-pending" },
   confirmed: { label: "Confirmed", className: "status-confirmed" },
   cancelled: { label: "Cancelled", className: "status-cancelled" },

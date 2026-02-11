@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Mail, CheckCircle } from "lucide-react";
+import { apiRequest } from "@/lib/api";
 
 const ForgotPassword = () => {
   const [email, setEmail] = useState("");
@@ -27,19 +28,27 @@ const ForgotPassword = () => {
     setIsLoading(true);
 
     try {
-      // Simulate API call - in production this would call backend
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      const response = await apiRequest('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+        requiresAuth: false,
+      });
       
       setIsSubmitted(true);
       toast({
         title: "Reset link sent",
-        description: "Check your email for password reset instructions",
+        description: response.message || "Check your email for password reset instructions",
       });
-    } catch (error) {
+
+      // For development: log the reset link
+      if (response.resetLink) {
+        console.log('🔗 Password Reset Link:', response.resetLink);
+      }
+    } catch (error: any) {
       toast({
         variant: "destructive",
         title: "Request failed",
-        description: "Unable to send reset link. Please try again.",
+        description: error.message || "Unable to send reset link. Please try again.",
       });
     } finally {
       setIsLoading(false);

@@ -1,130 +1,331 @@
+/**
+ * 🎯 APPOINTMENT SERVICE - Day-Based Booking System
+ * 
+ * NO DATES - Only days of week (Monday-Saturday) + slot indices
+ * Sunday is ALWAYS holiday
+ * 
+ * Single source of truth: slotValidation.js
+ */
+
 import { Appointment } from '../../models/Appointment.js';
 import { DoctorAvailability } from '../../models/DoctorAvailability.js';
-import { v4 as uuidv4 } from 'uuid';
+import { User } from '../../models/User.js';
+import {
+  validateSlot,
+  getDoctorSlotStatus,
+  getAvailableSlots as getAvailableSlotsUtil,
+} from '../../utils/slotValidation.js';
 
 /**
- * Check if appointment time falls within doctor's availability
+ * Custom error class for doctor unavailability
  */
-const isWithinAvailability = async (
-  doctorId,
-  appointmentDate,
-  appointmentTime
-) => {
-  const day = new Date(appointmentDate)
-    .toLocaleDateString('en-US', { weekday: 'long' })
-    .toLowerCase();
-
-  const availability = await DoctorAvailability.findOne({
-    doctorId,
-    day_of_week: day,
-  });
-
-  if (!availability) {
-    return false;
+export class DoctorUnavailableError extends Error {
+  constructor(message, errorCode = 'INVALID_SLOT', details = {}) {
+    super(message);
+    this.name = 'DoctorUnavailableError';
+    this.errorCode = errorCode;
+    this.details = details;
   }
+}
 
-  // Simple string comparison for time (e.g., "09:00" between "08:00" and "17:00")
-  return appointmentTime >= availability.start_time && appointmentTime <= availability.end_time;
+/**
+ * Get doctor slot status (weekly availability summary)
+ * @param {string} doctorId 
+ * @returns {Object} { monday: { status, slotsAvailable, totalSlots }, ... }
+ */
+export const getAvailableSlots = async (doctorId) => {
+  console.log(`\n📊 Fetching slot status for doctor ${doctorId}`);
+  
+  const models = { DoctorAvailability, Appointment };
+  const slotStatus = await getDoctorSlotStatus(doctorId, models);
+  
+  return slotStatus;
 };
 
 /**
- * Create appointment (PATIENT)
+ * Get available slot indices for a specific day
+ * @param {string} doctorId 
+ * @param {string} day 
+ * @returns {Array<number>} Available slot indices
  */
-export const createAppointment = async ({
-  patientId,
-  doctorId,
-  appointment_date,
-  appointment_time,
-  reason,
-}) => {
-  // 1️⃣ Prevent booking in the past
-  const appointmentDateTime = new Date(
-    `${appointment_date}T${appointment_time}`
-  );
-  if (appointmentDateTime < new Date()) {
-    throw new Error('Cannot book appointment in the past');
+export const getAvailableSlotsForDay = async (doctorId, day) => {
+  console.log(`\n🔍 Fetching available slots for ${doctorId} on ${day}`);
+  
+  const models = { DoctorAvailability, Appointment };
+  const slots = await getAvailableSlotsUtil(doctorId, day, models);
+  
+  console.log(`✅ Found ${slots.length} available slots`);
+  return slots;
+};
+
+/**
+ * Alias for getAvailableSlots (backward compatibility)
+ */
+export const getAvailableSlotsGrouped = async (doctorId) => {
+  return getAvailableSlots(doctorId);
+};
+
+/**
+ * Create new appointment (day-based)
+ * @param {Object} appointmentData 
+ * @returns {Promise<Object>} Created appointment with doctor details
+ */
+export const createAppointment = async (appointmentData) => {
+  console.log(`\n🆕 ========== CREATE APPOINTMENT ==========`);
+  console.log(`📝 Input:`, appointmentData);
+
+  const { patientId, doctorId, day, slotIndex, reason } = appointmentData;
+
+  // Validate slot using single source of truth
+  const models = { DoctorAvailability, Appointment };
+  const validation = await validateSlot(doctorId, day, slotIndex, models);
+
+  if (!validation.valid) {
+    console.log(`❌ Validation FAILED:`, validation);
+    throw new DoctorUnavailableError(
+      validation.message,
+      validation.errorCode,
+      { day, slotIndex }
+    );
   }
 
-  // 2️⃣ Enforce doctor availability
-  const isAvailable = await isWithinAvailability(
-    doctorId,
-    appointment_date,
-    appointment_time
-  );
+  console.log(`✅ Validation PASSED - Creating appointment`);
 
-  if (!isAvailable) {
-    throw new Error('Doctor not available at selected time');
-  }
-
-  // 3️⃣ Prevent duplicate booking (same patient + doctor + time)
-  const existing = await Appointment.findOne({
+  // Create appointment (let MongoDB generate _id)
+  const appointment = new Appointment({
     patientId,
     doctorId,
-    appointment_date,
-    appointment_time,
-    status: { $in: ['scheduled', 'confirmed'] },
-  });
-
-  if (existing) {
-    throw new Error('You already have an appointment at this time');
-  }
-
-  // 4️⃣ Insert appointment
-  const id = uuidv4();
-  await Appointment.create({
-    _id: id,
-    patientId,
-    doctorId,
-    appointment_date,
-    appointment_time,
+    day: day.toLowerCase().trim(),
+    slotIndex,
     reason,
     status: 'scheduled',
   });
 
-  return { id };
+  await appointment.save();
+  console.log(`💾 Appointment created:`, appointment._id);
+
+  // Fetch doctor details for response
+  const doctor = await User.findOne({ _id: doctorId, role: 'doctor' })
+    .select('name');
+
+  const response = {
+    ...appointment.toObject(),
+    doctorName: doctor ? doctor.name : 'Unknown',
+    specialization: 'General', // User model doesn't have specialization
+  };
+
+  console.log(`🎯 Created appointment:`, response);
+  console.log(`🆕 ========== CREATE END ==========\n`);
+
+  return response;
 };
 
 /**
- * Get appointments for patient
+ * Get all appointments for a patient
+ * @param {string} patientId 
+ * @returns {Promise<Array>} Appointments with doctor details
  */
 export const getAppointmentsForPatient = async (patientId) => {
-  const appointments = await Appointment.find({ patientId }).sort({
-    appointment_date: -1,
-    appointment_time: -1,
-  });
+  console.log(`\n📋 Fetching appointments for patient ${patientId}`);
 
-  return appointments;
-};
+  const appointments = await Appointment.find({ patientId })
+    .sort({ createdAt: -1 });
 
-/**
- * Get appointments for doctor
- */
-export const getAppointmentsForDoctor = async (doctorId) => {
-  const appointments = await Appointment.find({ doctorId }).sort({
-    appointment_date: -1,
-    appointment_time: -1,
-  });
+  // Enrich with doctor details
+  const enriched = await Promise.all(
+    appointments.map(async (apt) => {
+      const doctor = await User.findOne({ _id: apt.doctorId, role: 'doctor' })
+        .select('name');
 
-  return appointments;
-};
-
-/**
- * Update appointment status (DOCTOR / PATIENT)
- */
-export const updateAppointmentStatus = async (appointmentId, status) => {
-  const allowedStatuses = ['confirmed', 'completed', 'cancelled'];
-  if (!allowedStatuses.includes(status)) {
-    throw new Error('Invalid appointment status');
-  }
-
-  const result = await Appointment.updateOne(
-    { _id: appointmentId },
-    { status }
+      return {
+        ...apt.toObject(),
+        doctorName: doctor ? doctor.name : 'Unknown',
+        specialization: 'General',
+      };
+    })
   );
 
-  if (result.matchedCount === 0) {
+  console.log(`✅ Found ${enriched.length} appointments`);
+  return enriched;
+};
+
+/**
+ * Get all appointments for a doctor
+ * @param {string} doctorId 
+ * @returns {Promise<Array>} Appointments with patient details
+ */
+export const getAppointmentsForDoctor = async (doctorId) => {
+  console.log(`\n📋 Fetching appointments for doctor ${doctorId}`);
+
+  const appointments = await Appointment.find({ doctorId })
+    .sort({ day: 1, slotIndex: 1 });
+
+  // Enrich with patient details
+  const enriched = await Promise.all(
+    appointments.map(async (apt) => {
+      const patient = await User.findOne({ _id: apt.patientId, role: 'patient' })
+        .select('name');
+
+      return {
+        ...apt.toObject(),
+        patientName: patient ? patient.name : 'Unknown',
+        patientContact: 'N/A', // User model doesn't have contact_number
+      };
+    })
+  );
+
+  console.log(`✅ Found ${enriched.length} appointments`);
+  return enriched;
+};
+
+/**
+ * Get all appointments (admin)
+ * @returns {Promise<Array>} All appointments with details
+ */
+export const getAllAppointments = async () => {
+  console.log(`\n📋 Fetching all appointments (admin)`);
+
+  const appointments = await Appointment.find()
+    .sort({ createdAt: -1 });
+
+  // Enrich with doctor and patient details
+  const enriched = await Promise.all(
+    appointments.map(async (apt) => {
+      const [doctor, patient] = await Promise.all([
+        User.findOne({ _id: apt.doctorId, role: 'doctor' })
+          .select('name'),
+        User.findOne({ _id: apt.patientId, role: 'patient' })
+          .select('name'),
+      ]);
+
+      return {
+        ...apt.toObject(),
+        doctorName: doctor ? doctor.name : 'Unknown',
+        specialization: 'General',
+        patientName: patient ? patient.name : 'Unknown',
+      };
+    })
+  );
+
+  console.log(`✅ Found ${enriched.length} appointments`);
+  return enriched;
+};
+
+/**
+ * Reschedule appointment to new day/slot
+ * @param {string} appointmentId 
+ * @param {string} newDay 
+ * @param {number} newSlotIndex 
+ * @returns {Promise<Object>} Updated appointment
+ */
+export const rescheduleAppointment = async (appointmentId, newDay, newSlotIndex) => {
+  console.log(`\n🔄 ========== RESCHEDULE APPOINTMENT ==========`);
+  console.log(`📝 ID: ${appointmentId}, New: ${newDay} slot ${newSlotIndex}`);
+
+  // Find existing appointment
+  const appointment = await Appointment.findById(appointmentId);
+  if (!appointment) {
     throw new Error('Appointment not found');
   }
 
-  return true;
+  // Cannot reschedule cancelled appointments
+  if (appointment.status === 'cancelled') {
+    throw new Error('Cannot reschedule cancelled appointment');
+  }
+
+  console.log(`📋 Current: ${appointment.day} slot ${appointment.slotIndex}`);
+
+  // If same slot, no change needed
+  if (appointment.day === newDay.toLowerCase().trim() && appointment.slotIndex === newSlotIndex) {
+    console.log(`ℹ️ Same slot - no change needed`);
+    
+    // Still return enriched appointment
+    const doctor = await User.findOne({ _id: appointment.doctorId, role: 'doctor' })
+      .select('name');
+    
+    return {
+      ...appointment.toObject(),
+      doctorName: doctor ? doctor.name : 'Unknown',
+      specialization: 'General',
+    };
+  }
+
+  // Validate new slot using single source of truth
+  const models = { DoctorAvailability, Appointment };
+  const validation = await validateSlot(
+    appointment.doctorId,
+    newDay,
+    newSlotIndex,
+    models
+  );
+
+  if (!validation.valid) {
+    console.log(`❌ Validation FAILED:`, validation);
+    throw new DoctorUnavailableError(
+      validation.message,
+      validation.errorCode,
+      { day: newDay, slotIndex: newSlotIndex }
+    );
+  }
+
+  console.log(`✅ New slot is valid - Rescheduling`);
+
+  // Update appointment
+  appointment.day = newDay.toLowerCase().trim();
+  appointment.slotIndex = newSlotIndex;
+  appointment.status = 'scheduled'; // Reset to scheduled
+  await appointment.save();
+
+  console.log(`💾 Appointment rescheduled`);
+  console.log(`🔄 ========== RESCHEDULE END ==========\n`);
+
+  // Return enriched appointment
+  const doctor = await User.findOne({ _id: appointment.doctorId, role: 'doctor' })
+    .select('name');
+  
+  return {
+    ...appointment.toObject(),
+    doctorName: doctor ? doctor.name : 'Unknown',
+    specialization: 'General',
+  };
+};
+
+/**
+ * Update appointment status
+ * @param {string} appointmentId 
+ * @param {string} status 
+ * @returns {Promise<Object>} Updated appointment
+ */
+export const updateAppointmentStatus = async (appointmentId, status) => {
+  console.log(`\n🔄 Updating appointment ${appointmentId} status to ${status}`);
+
+  const validStatuses = ['scheduled', 'confirmed', 'completed', 'cancelled'];
+  if (!validStatuses.includes(status)) {
+    throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+  }
+
+  const appointment = await Appointment.findById(appointmentId);
+  if (!appointment) {
+    throw new Error('Appointment not found');
+  }
+
+  appointment.status = status;
+  await appointment.save();
+
+  console.log(`✅ Status updated to ${status}`);
+  
+  // Return enriched appointment
+  const [doctor, patient] = await Promise.all([
+    User.findOne({ _id: appointment.doctorId, role: 'doctor' })
+      .select('name'),
+    User.findOne({ _id: appointment.patientId, role: 'patient' })
+      .select('name'),
+  ]);
+  
+  return {
+    ...appointment.toObject(),
+    doctorName: doctor ? doctor.name : 'Unknown',
+    specialization: 'General',
+    patientName: patient ? patient.name : 'Unknown',
+  };
 };

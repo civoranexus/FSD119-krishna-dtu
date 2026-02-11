@@ -22,6 +22,14 @@ const userSchema = new mongoose.Schema(
       enum: ['patient', 'doctor', 'admin'],
       default: 'patient',
     },
+    resetPasswordToken: {
+      type: String,
+      default: null,
+    },
+    resetPasswordExpires: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

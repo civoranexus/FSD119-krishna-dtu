@@ -1,10 +1,15 @@
 import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import StatCard from "@/components/shared/StatCard";
+import { LoadingState } from "@/components/shared/LoadingState";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Users, Calendar, UserCheck, Activity, ArrowUpRight } from "lucide-react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import api from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import { LOADING_MESSAGES } from "@/lib/constants";
+import { parseErrorMessage } from "@/lib/helpers";
 
 interface Activity {
   id: string | number;
@@ -29,81 +34,92 @@ const AdminDashboard = () => {
     completedToday: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
-    const fetchDashboardData = async () => {
-      try {
-        setIsLoading(true);
-        
-        // Fetch users for stats
-        const usersResponse = await api.get("/users");
-        const users = Array.isArray(usersResponse) ? usersResponse : usersResponse?.data || [];
-        
-        // Fetch appointments
-        const appointmentsResponse = await api.get("/appointments");
-        const appointments = Array.isArray(appointmentsResponse) ? appointmentsResponse : appointmentsResponse?.data || [];
-        
-        // Calculate stats
-        const doctors = users.filter((u: { role: string }) => u.role === "doctor");
-        const today = new Date().toDateString();
-        const todayAppointments = appointments.filter((a: { date: string }) => 
-          new Date(a.date).toDateString() === today
-        );
-        const completedToday = todayAppointments.filter((a: { status: string }) => 
-          a.status === "completed"
-        );
-
-        setStats({
-          totalUsers: users.length,
-          activeDoctors: doctors.length,
-          appointmentsToday: todayAppointments.length,
-          completedToday: completedToday.length,
-        });
-
-        // Create recent activity from latest data
-        const activities: Activity[] = [];
-        
-        // Add recent user registrations
-        const recentUsers = users.slice(-3).reverse();
-        recentUsers.forEach((user: { _id: string; name: string; role: string; createdAt: string }, index: number) => {
-          activities.push({
-            id: `user-${user._id || index}`,
-            type: user.role === "doctor" ? "user_registered" : "user_registered",
-            message: `New ${user.role} registered: ${user.name}`,
-            time: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Recently",
-          });
-        });
-
-        // Add recent appointments
-        const recentAppointments = appointments.slice(-3).reverse();
-        recentAppointments.forEach((apt: { _id: string; status: string; doctorId?: { name: string }; createdAt: string }, index: number) => {
-          activities.push({
-            id: `apt-${apt._id || index}`,
-            type: apt.status === "cancelled" ? "appointment_cancelled" : "appointment_booked",
-            message: apt.status === "cancelled" 
-              ? "Appointment cancelled" 
-              : `Appointment booked${apt.doctorId?.name ? ` with ${apt.doctorId.name}` : ""}`,
-            time: apt.createdAt ? new Date(apt.createdAt).toLocaleDateString() : "Recently",
-          });
-        });
-
-        setRecentActivity(activities.slice(0, 5));
-      } catch (error) {
-        console.error("Failed to fetch dashboard data:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     fetchDashboardData();
   }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const [usersResponse, appointmentsResponse] = await Promise.all([
+        api.get("/users"),
+        api.get("/appointments"),
+      ]);
+      
+      const users = Array.isArray(usersResponse) ? usersResponse : usersResponse?.data || [];
+      const appointments = Array.isArray(appointmentsResponse) ? appointmentsResponse : appointmentsResponse?.data || [];
+      
+      const doctors = users.filter((u: { role: string }) => u.role === "doctor");
+      const today = new Date().toISOString().split('T')[0];
+      const todayAppointments = appointments.filter((a: { appointment_date: string }) => 
+        a.appointment_date === today
+      );
+      const completedToday = todayAppointments.filter((a: { status: string }) => 
+        a.status === "completed"
+      );
+
+      setStats({
+        totalUsers: users.length,
+        activeDoctors: doctors.length,
+        appointmentsToday: todayAppointments.length,
+        completedToday: completedToday.length,
+      });
+
+      const activities: Activity[] = [];
+      
+      const recentUsers = users.slice(-3).reverse();
+      recentUsers.forEach((user: { _id: string; name: string; role: string; createdAt: string }, index: number) => {
+        activities.push({
+          id: `user-${user._id || index}`,
+          type: user.role === "doctor" ? "user_registered" : "user_registered",
+          message: `New ${user.role} registered: ${user.name}`,
+          time: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Recently",
+        });
+      });
+
+      const recentAppointments = appointments.slice(-3).reverse();
+      recentAppointments.forEach((apt: { _id: string; status: string; doctorName?: string; createdAt: string }, index: number) => {
+        activities.push({
+          id: `apt-${apt._id || index}`,
+          type: apt.status === "cancelled" ? "appointment_cancelled" : "appointment_booked",
+          message: apt.status === "cancelled" 
+            ? "Appointment cancelled" 
+            : `Appointment booked${apt.doctorName ? ` with ${apt.doctorName}` : ""}`,
+          time: apt.createdAt ? new Date(apt.createdAt).toLocaleDateString() : "Recently",
+        });
+      });
+
+      setRecentActivity(activities.slice(0, 5));
+    } catch (error) {
+      const message = parseErrorMessage(error);
+      setError(message);
+      toast({
+        variant: "destructive",
+        title: "Error loading dashboard",
+        description: message,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   if (isLoading) {
     return (
       <DashboardLayout role="admin">
-        <div className="flex items-center justify-center h-64">
-          <p className="text-muted-foreground">Loading dashboard...</p>
-        </div>
+        <LoadingState message={LOADING_MESSAGES.LOADING} />
+      </DashboardLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <DashboardLayout role="admin">
+        <ErrorState message={error} onRetry={fetchDashboardData} />
       </DashboardLayout>
     );
   }
@@ -117,7 +133,6 @@ const AdminDashboard = () => {
         </p>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatCard
           title="Total Users"
@@ -146,13 +161,12 @@ const AdminDashboard = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Recent Activity */}
         <div className="lg:col-span-2 healthcare-card">
           <div className="flex items-center justify-between mb-6">
             <h2 className="section-title mb-0">Recent Activity</h2>
             <Button variant="ghost" size="sm">
               View All
-              <ArrowUpRight className="h-4 w-4" />
+              <ArrowUpRight className="h-4 w-4 ml-2" />
             </Button>
           </div>
           {recentActivity.length === 0 ? (
@@ -173,7 +187,7 @@ const AdminDashboard = () => {
                     }`} />
                     <p className="text-foreground">{activity.message}</p>
                   </div>
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">
+                  <span className="text-sm text-muted-foreground whitespace-nowrap ml-4">
                     {activity.time}
                   </span>
                 </div>
@@ -182,7 +196,6 @@ const AdminDashboard = () => {
           )}
         </div>
 
-        {/* System Status */}
         <div className="healthcare-card">
           <h2 className="section-title">System Status</h2>
           <div className="space-y-4">
@@ -216,7 +229,6 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      {/* Quick Actions */}
       <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Button variant="outline" className="h-auto py-4" asChild>
           <Link to="/admin/users" className="flex flex-col items-center gap-2">
@@ -224,17 +236,17 @@ const AdminDashboard = () => {
             <span>Manage Users</span>
           </Link>
         </Button>
-        <Button variant="outline" className="h-auto py-4">
-          <div className="flex flex-col items-center gap-2">
+        <Button variant="outline" className="h-auto py-4" asChild>
+          <Link to="/admin/appointments" className="flex flex-col items-center gap-2">
             <Calendar className="h-5 w-5" />
             <span>View Appointments</span>
-          </div>
+          </Link>
         </Button>
-        <Button variant="outline" className="h-auto py-4">
-          <div className="flex flex-col items-center gap-2">
+        <Button variant="outline" className="h-auto py-4" asChild>
+          <Link to="/admin/logs" className="flex flex-col items-center gap-2">
             <Activity className="h-5 w-5" />
             <span>System Logs</span>
-          </div>
+          </Link>
         </Button>
       </div>
     </DashboardLayout>

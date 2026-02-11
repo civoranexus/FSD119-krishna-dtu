@@ -47,8 +47,8 @@ const About = () => {
     <PublicLayout>
       {/* Hero */}
       <section className="py-20 md:py-28">
-        <div className="container">
-          <div className="max-w-3xl mx-auto text-center">
+        <div className="container flex flex-col md:flex-row items-center gap-12">
+          <div className="flex-1 max-w-3xl mx-auto text-center md:text-left">
             <h1 className="text-4xl md:text-5xl font-bold text-foreground mb-6 text-balance">
               Transforming Healthcare Delivery
             </h1>
@@ -57,6 +57,9 @@ const About = () => {
               management accessible, efficient, and secure for everyone involved 
               in the care journey.
             </p>
+          </div>
+          <div className="flex-1 flex justify-center md:justify-end">
+            <img src="/about-us.jpg" alt="HealthVillage Team" className="rounded-2xl shadow-xl w-full max-w-md object-cover" />
           </div>
         </div>
       </section>
